@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "semantic_observation_poc",
+  "version": "${version}",
+  "name": "Semantic Observation Proof of Concept",
+  "description": "Renderer-derived semantic output experiment for opaque blocks.",
+  "environment": "client",
+  "mixins": [
+    "semantic_observation_poc.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.9.3",
+    "minecraft": "1.16.1"
+  }
+}

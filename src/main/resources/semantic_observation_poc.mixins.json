@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.github.minecraftaidiscovery.semantic.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "client": [
+    "BufferBuilderMixin",
+    "ChunkRebuildTaskMixin",
+    "KeyboardMixin",
+    "WorldRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
