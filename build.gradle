@@ -1,0 +1,49 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+    id 'java'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+    testImplementation 'junit:junit:4.13.2'
+}
+
+def modVersion = version
+processResources {
+    inputs.property 'version', modVersion
+
+    filesMatching('fabric.mod.json') {
+        expand 'version': modVersion
+    }
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.release = 8
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+def minecraftJavaExecutable = providers.gradleProperty('minecraftJavaExecutable')
+tasks.named('runClient', JavaExec) {
+    if (minecraftJavaExecutable.isPresent()) {
+        executable = minecraftJavaExecutable.get()
+    }
+}
