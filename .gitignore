@@ -1,0 +1,31 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# editor and IDE state
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# local config
+.env
+.env.*
+!.env.example
+
+# java and gradle output
+.gradle/
+build/
+out/
+*.class
+
+# MC dev runtime
+run/
+logs/
+crash-reports/
+
+# temp files
+*.log
+tmp/
+temp/
