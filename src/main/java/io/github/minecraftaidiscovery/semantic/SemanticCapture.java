@@ -9,11 +9,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.texture.NativeImage;
@@ -24,10 +26,15 @@ public final class SemanticCapture {
     private SemanticCapture() {
     }
 
-    public static Path capture(MinecraftClient client, Runnable renderSolidLayer) throws IOException {
+    public static Path capture(
+        MinecraftClient client,
+        Consumer<SemanticRenderLayer> renderLayer
+    ) throws IOException {
         Framebuffer mainFramebuffer = client.getFramebuffer();
         int width = mainFramebuffer.viewportWidth;
         int height = mainFramebuffer.viewportHeight;
+        List<SemanticRenderLayer> renderLayers = SemanticRenderLayer.supportedInOrder();
+        String graphicsMode = client.options.graphicsMode.toString();
         Framebuffer semanticFramebuffer = new Framebuffer(width, height, true, MinecraftClient.IS_SYSTEM_MAC);
         NativeImage encodedImage = null;
 
@@ -35,7 +42,9 @@ public final class SemanticCapture {
             semanticFramebuffer.setClearColor(0.0F, 0.0F, 0.0F, 0.0F);
             semanticFramebuffer.clear(MinecraftClient.IS_SYSTEM_MAC);
             semanticFramebuffer.beginWrite(true);
-            SemanticRenderPass.run(renderSolidLayer);
+            for (SemanticRenderLayer layer : renderLayers) {
+                SemanticRenderPass.run(layer, () -> renderLayer.accept(layer));
+            }
 
             semanticFramebuffer.beginRead();
             encodedImage = new NativeImage(width, height, false);
@@ -55,14 +64,22 @@ public final class SemanticCapture {
         }
 
         try (NativeImage image = encodedImage) {
-            return writeCapture(client, image, BlockClassManifestRuntime.require());
+            return writeCapture(
+                client,
+                image,
+                BlockClassManifestRuntime.require(),
+                renderLayers,
+                graphicsMode
+            );
         }
     }
 
     private static Path writeCapture(
         MinecraftClient client,
         NativeImage encodedImage,
-        BlockClassVocabulary vocabulary
+        BlockClassVocabulary vocabulary,
+        List<SemanticRenderLayer> renderLayers,
+        String graphicsMode
     ) throws IOException {
         int width = encodedImage.getWidth();
         int height = encodedImage.getHeight();
@@ -76,13 +93,13 @@ public final class SemanticCapture {
                     NativeImage.getRed(encodedPixel),
                     NativeImage.getGreen(encodedPixel)
                 );
+                SemanticClassEncoding.requireValidGpuPixel(
+                    classId,
+                    NativeImage.getBlue(encodedPixel),
+                    NativeImage.getAlpha(encodedPixel)
+                );
                 if (classId != BlockClassManifest.BACKGROUND_CLASS_ID) {
                     vocabulary.requireRegistryIdentifier(classId);
-                    if (NativeImage.getBlue(encodedPixel) != 0 || NativeImage.getAlpha(encodedPixel) != 0xFF) {
-                        throw new IllegalStateException(
-                            "Semantic GPU transport guard channels were modified for class ID " + classId
-                        );
-                    }
                 }
                 classIds[y * width + x] = classId;
                 pixelCounts.put(classId, pixelCounts.getOrDefault(classId, 0L) + 1L);
@@ -102,7 +119,9 @@ public final class SemanticCapture {
             classBuffer.length,
             visualizationPath.getFileName().toString(),
             vocabulary,
-            pixelCounts
+            pixelCounts,
+            renderLayers,
+            graphicsMode
         );
 
         Files.createDirectories(captureDirectory);

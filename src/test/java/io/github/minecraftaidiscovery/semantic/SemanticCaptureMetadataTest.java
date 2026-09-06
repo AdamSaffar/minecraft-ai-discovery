@@ -26,10 +26,21 @@ public class SemanticCaptureMetadataTest {
             6,
             "capture.png",
             vocabulary,
-            counts
+            counts,
+            SemanticRenderLayer.supportedInOrder(),
+            "fancy"
         );
 
-        assertTrue(json.contains("\"formatVersion\": 2"));
+        assertTrue(json.contains("\"formatVersion\": 3"));
+        assertTrue(json.contains("\"format\": \"semantic-observation-v3\""));
+        assertTrue(json.contains("\"renderLayers\": [\"solid\", \"cutout_mipped\", \"cutout\"]"));
+        assertTrue(json.contains("\"graphicsMode\": \"fancy\""));
+        assertTrue(
+            json.contains(
+                "\"cutoutCoverage\": {\"source\": \"block atlas alpha\", "
+                    + "\"alphaFunction\": \"greater\", \"threshold\": 0.5}"
+            )
+        );
         assertTrue(json.contains("\"encoding\": \"uint16 little-endian class id\""));
         assertTrue(json.contains("\"byteLength\": 6"));
         assertTrue(json.contains(vocabulary.getFingerprintSha256()));
@@ -52,7 +63,9 @@ public class SemanticCaptureMetadataTest {
                 2,
                 "capture.png",
                 vocabulary,
-                unknown
+                unknown,
+                SemanticRenderLayer.supportedInOrder(),
+                "fast"
             );
             fail("Expected unknown semantic class to fail");
         } catch (IllegalStateException exception) {
@@ -69,11 +82,58 @@ public class SemanticCaptureMetadataTest {
                 1,
                 "capture.png",
                 vocabulary,
-                background
+                background,
+                SemanticRenderLayer.supportedInOrder(),
+                "fabulous"
             );
             fail("Expected mismatched buffer length to fail");
         } catch (IllegalArgumentException exception) {
             assertTrue(exception.getMessage().contains("Expected class-buffer length 2"));
+        }
+    }
+
+    @Test
+    public void rejectsInvalidLayerAndGraphicsMetadata() {
+        BlockClassVocabulary vocabulary = vocabulary();
+        Map<Integer, Long> background = new LinkedHashMap<>();
+        background.put(0, 1L);
+
+        expectIllegalArgument(
+            () -> SemanticCaptureMetadata.toJson(
+                1,
+                1,
+                "capture.classes.u16le",
+                2,
+                "capture.png",
+                vocabulary,
+                background,
+                Arrays.asList(SemanticRenderLayer.CUTOUT, SemanticRenderLayer.SOLID),
+                "fancy"
+            ),
+            "not in canonical order"
+        );
+        expectIllegalArgument(
+            () -> SemanticCaptureMetadata.toJson(
+                1,
+                1,
+                "capture.classes.u16le",
+                2,
+                "capture.png",
+                vocabulary,
+                background,
+                SemanticRenderLayer.supportedInOrder(),
+                "unknown"
+            ),
+            "Unsupported graphics mode"
+        );
+    }
+
+    private static void expectIllegalArgument(ThrowingRunnable runnable, String expectedMessage) {
+        try {
+            runnable.run();
+            fail("Expected IllegalArgumentException");
+        } catch (IllegalArgumentException exception) {
+            assertTrue(exception.getMessage().contains(expectedMessage));
         }
     }
 
@@ -89,5 +149,9 @@ public class SemanticCaptureMetadataTest {
                 )
             )
         );
+    }
+
+    private interface ThrowingRunnable {
+        void run();
     }
 }

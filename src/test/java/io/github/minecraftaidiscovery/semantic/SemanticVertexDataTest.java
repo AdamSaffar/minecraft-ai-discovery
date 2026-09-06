@@ -74,6 +74,19 @@ public class SemanticVertexDataTest {
         assertEquals(0, SemanticVertexEncoding.getActiveClassId());
     }
 
+    @Test
+    public void failsWhenTheSemanticSidecarHasFewerVerticesThanTheUpload() {
+        SemanticVertexData data = new SemanticVertexData();
+        for (int vertex = 0; vertex < 3; vertex++) {
+            data.appendClassId(447);
+        }
+
+        expectIllegalState(
+            () -> data.takeVertices(4),
+            "has 3 vertices but the renderer uploaded 4"
+        );
+    }
+
     private static void expectIllegalState(ThrowingRunnable runnable, String expectedMessage) {
         try {
             runnable.run();

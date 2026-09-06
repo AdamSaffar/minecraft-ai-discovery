@@ -67,7 +67,7 @@ public final class SemanticVertexData {
 
     public static void requireConstantQuadClassIds(byte[] encodedVertices) {
         if (encodedVertices == null || encodedVertices.length % (BYTES_PER_VERTEX * 4) != 0) {
-            throw new IllegalStateException("Semantic solid-layer vertex data is not complete quads");
+            throw new IllegalStateException("Semantic vertex data is not complete quads");
         }
         for (int quadOffset = 0; quadOffset < encodedVertices.length; quadOffset += BYTES_PER_VERTEX * 4) {
             int classId = classIdAt(encodedVertices, quadOffset);
@@ -75,7 +75,7 @@ public final class SemanticVertexData {
                 int vertexOffset = quadOffset + vertex * BYTES_PER_VERTEX;
                 if (classIdAt(encodedVertices, vertexOffset) != classId) {
                     throw new IllegalStateException(
-                        "A semantic solid-layer quad contains more than one class ID"
+                        "A semantic quad contains more than one class ID"
                     );
                 }
             }
