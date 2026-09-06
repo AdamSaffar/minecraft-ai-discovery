@@ -3,6 +3,8 @@ package io.github.minecraftaidiscovery.semantic.mixin;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexEncoding;
 import java.util.Random;
 import net.minecraft.block.BlockState;
+import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.block.BlockRenderManager;
 import net.minecraft.client.util.math.MatrixStack;
@@ -32,11 +34,14 @@ abstract class ChunkRebuildTaskMixin {
         boolean cull,
         Random random
     ) {
-        int previousMarker = SemanticVertexEncoding.beginBlock(Registry.BLOCK.getId(state.getBlock()).toString());
+        boolean solidLayer = RenderLayers.getBlockLayer(state) == RenderLayer.getSolid();
+        int previousClassId = solidLayer
+            ? SemanticVertexEncoding.beginBlock(Registry.BLOCK.getId(state.getBlock()).toString())
+            : SemanticVertexEncoding.beginBackground();
         try {
             return renderer.renderBlock(state, pos, world, matrices, vertices, cull, random);
         } finally {
-            SemanticVertexEncoding.restore(previousMarker);
+            SemanticVertexEncoding.restore(previousClassId);
         }
     }
 }

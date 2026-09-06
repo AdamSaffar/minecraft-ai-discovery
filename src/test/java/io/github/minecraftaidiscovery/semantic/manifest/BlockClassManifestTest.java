@@ -163,6 +163,20 @@ public class BlockClassManifestTest {
         }
     }
 
+    @Test
+    public void rejectsMismatchedExpectedFingerprint() {
+        BlockClassManifest manifest = generate(source("minecraft:air", 0));
+
+        try {
+            manifest.requireFingerprint(
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            );
+            fail("Expected manifest fingerprint mismatch to fail");
+        } catch (IllegalStateException exception) {
+            assertTrue(exception.getMessage().contains("Expected block class manifest SHA-256"));
+        }
+    }
+
     private static BlockClassManifest generate(BlockClassManifest.SourceEntry... entries) {
         return BlockClassManifest.generate(
             MINECRAFT_VERSION,

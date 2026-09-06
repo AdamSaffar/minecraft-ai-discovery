@@ -7,3 +7,4 @@ The project is currently in its initial proof-of-concept stage. Additional docum
 ## Experiments
 
 - [Semantic observation proof of concept](experiments/semantic-observation-poc.md) — verified renderer-derived class output for basic opaque blocks in Minecraft Java Edition 1.16.1.
+- [Solid-block semantic classes](experiments/solid-block-semantic-classes.md) — verified manifest-backed unsigned 16-bit class output for representative solid-layer blocks.

@@ -13,6 +13,8 @@ public final class BlockClassManifestProbe {
     public static final String EXPECTED_MINECRAFT_VERSION = "1.16.1";
     public static final String YARN_MAPPINGS = "1.16.1+build.21";
     public static final int EXPECTED_BLOCK_ENTRY_COUNT = 763;
+    public static final String EXPECTED_MANIFEST_SHA256 =
+        "37af04fd5db5f797773782b3b8396e0247c171bf8ad13e56e1408e22335f937b";
     public static final String CANDIDATE_FILE_NAME = "block-class-manifest-candidate.json";
 
     private BlockClassManifestProbe() {
@@ -52,6 +54,7 @@ public final class BlockClassManifestProbe {
             sourceEntries
         );
         manifest.requireEntryCount(EXPECTED_BLOCK_ENTRY_COUNT);
+        manifest.requireFingerprint(EXPECTED_MANIFEST_SHA256);
         return manifest;
     }
 

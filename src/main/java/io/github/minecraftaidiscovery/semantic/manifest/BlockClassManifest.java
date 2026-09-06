@@ -139,6 +139,16 @@ public final class BlockClassManifest {
         }
     }
 
+    public void requireFingerprint(String expectedFingerprintSha256) {
+        validateMetadata("expectedFingerprintSha256", expectedFingerprintSha256);
+        if (!fingerprintSha256.equals(expectedFingerprintSha256)) {
+            throw new IllegalStateException(
+                "Expected block class manifest SHA-256 " + expectedFingerprintSha256
+                    + " but found " + fingerprintSha256
+            );
+        }
+    }
+
     public String canonicalFingerprintData() {
         StringBuilder canonical = new StringBuilder();
         canonical.append(FINGERPRINT_HEADER).append('\n');
