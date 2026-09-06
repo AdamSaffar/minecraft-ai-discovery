@@ -78,6 +78,12 @@ public final class SemanticCaptureMetadata {
         appendString(json, "pixelOrder", SemanticClassEncoding.PIXEL_ORDER, true, 2);
         appendRenderLayers(json, renderLayers);
         appendString(json, "graphicsMode", graphicsMode, true, 2);
+        if (usesTextureCoverage(renderLayers)) {
+            json.append("  \"cutoutCoverage\": {\"source\": \"block atlas alpha\", ")
+                .append("\"alphaFunction\": \"greater\", \"threshold\": ")
+                .append(String.format(Locale.ROOT, "%.1f", SemanticClassEncoding.CUTOUT_ALPHA_THRESHOLD))
+                .append("},\n");
+        }
         json.append("  \"backgroundClassId\": ").append(BlockClassManifest.BACKGROUND_CLASS_ID).append(",\n");
         json.append("  \"manifest\": {\"entryCount\": ").append(vocabulary.getEntryCount())
             .append(", \"sha256\": \"").append(vocabulary.getFingerprintSha256()).append("\"},\n");
@@ -125,6 +131,15 @@ public final class SemanticCaptureMetadata {
             json.append('"').append(renderLayers.get(index).getMetadataName()).append('"');
         }
         json.append("],\n");
+    }
+
+    private static boolean usesTextureCoverage(List<SemanticRenderLayer> renderLayers) {
+        for (SemanticRenderLayer layer : renderLayers) {
+            if (layer.usesTextureCoverage()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void requireGraphicsMode(String graphicsMode) {

@@ -1,5 +1,7 @@
 package io.github.minecraftaidiscovery.semantic.mixin;
 
+import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
+import io.github.minecraftaidiscovery.semantic.SemanticRenderLayer;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexEncoding;
 import java.util.Random;
 import net.minecraft.block.BlockState;
@@ -34,8 +36,9 @@ abstract class ChunkRebuildTaskMixin {
         boolean cull,
         Random random
     ) {
-        boolean solidLayer = RenderLayers.getBlockLayer(state) == RenderLayer.getSolid();
-        int previousClassId = solidLayer
+        RenderLayer minecraftLayer = RenderLayers.getBlockLayer(state);
+        SemanticRenderLayer semanticLayer = SemanticMinecraftRenderLayers.classify(minecraftLayer);
+        int previousClassId = semanticLayer != null
             ? SemanticVertexEncoding.beginBlock(Registry.BLOCK.getId(state.getBlock()).toString())
             : SemanticVertexEncoding.beginBackground();
         try {

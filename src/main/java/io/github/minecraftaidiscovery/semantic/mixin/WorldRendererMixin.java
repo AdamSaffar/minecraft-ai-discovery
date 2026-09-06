@@ -2,6 +2,7 @@ package io.github.minecraftaidiscovery.semantic.mixin;
 
 import io.github.minecraftaidiscovery.semantic.SemanticCapture;
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureRequests;
+import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
 import java.nio.file.Path;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.Camera;
@@ -35,11 +36,11 @@ abstract class WorldRendererMixin {
         at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/client/render/WorldRenderer;renderLayer(Lnet/minecraft/client/render/RenderLayer;Lnet/minecraft/client/util/math/MatrixStack;DDD)V",
-            ordinal = 0,
+            ordinal = 2,
             shift = At.Shift.AFTER
         )
     )
-    private void semanticObservation$captureAfterSolidLayer(
+    private void semanticObservation$captureAfterSupportedLayers(
         MatrixStack matrices,
         float tickDelta,
         long limitTime,
@@ -59,8 +60,8 @@ abstract class WorldRendererMixin {
         try {
             Path metadataPath = SemanticCapture.capture(
                 client,
-                () -> renderLayer(
-                    RenderLayer.getSolid(),
+                layer -> renderLayer(
+                    SemanticMinecraftRenderLayers.requireMinecraftLayer(layer),
                     matrices,
                     cameraPosition.x,
                     cameraPosition.y,

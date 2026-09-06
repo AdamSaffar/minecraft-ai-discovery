@@ -7,6 +7,8 @@ public final class SemanticClassEncoding {
     public static final String BYTE_ORDER = "little-endian";
     public static final String PIXEL_ORDER = "row-major, top-left origin";
     public static final int BYTES_PER_PIXEL = 2;
+    public static final float CUTOUT_ALPHA_THRESHOLD = 0.5F;
+    public static final int MIN_VISIBLE_CUTOUT_ALPHA = 128;
 
     private static final int FALSE_COLOR_MULTIPLIER = 0x9E3779;
     private static final int FALSE_COLOR_OFFSET = 0x7F4A7C;
@@ -60,6 +62,28 @@ public final class SemanticClassEncoding {
         requireUnsigned8("lowByte", lowByte);
         requireUnsigned8("highByte", highByte);
         return lowByte | highByte << 8;
+    }
+
+    public static void requireValidGpuPixel(int classId, int blueGuard, int alpha) {
+        requireUnsigned16(classId);
+        requireUnsigned8("blueGuard", blueGuard);
+        requireUnsigned8("alpha", alpha);
+        if (blueGuard != 0) {
+            throw new IllegalStateException(
+                "Semantic GPU transport blue guard was modified for class ID " + classId
+            );
+        }
+        if (classId != BlockClassManifest.BACKGROUND_CLASS_ID
+            && alpha < MIN_VISIBLE_CUTOUT_ALPHA) {
+            throw new IllegalStateException(
+                "Semantic GPU transport produced an invalid alpha for class ID " + classId
+            );
+        }
+    }
+
+    public static boolean cutoutAlphaSurvives(int alpha) {
+        requireUnsigned8("alpha", alpha);
+        return alpha >= MIN_VISIBLE_CUTOUT_ALPHA;
     }
 
     public static int falseColorRgb(int classId) {

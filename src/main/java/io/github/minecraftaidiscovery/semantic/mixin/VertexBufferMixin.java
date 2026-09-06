@@ -101,14 +101,14 @@ abstract class VertexBufferMixin {
         }
         String activeFingerprint = BlockClassManifestRuntime.require().getFingerprintSha256();
         if (!activeFingerprint.equals(semanticObservation$manifestFingerprint)) {
-            throw new IllegalStateException("Solid-layer semantic buffer uses a different manifest fingerprint");
+            throw new IllegalStateException("Semantic vertex buffer uses a different manifest fingerprint");
         }
         if (semanticObservation$vertexCount != vertexCount) {
-            throw new IllegalStateException("Solid-layer semantic buffer has a mismatched vertex count");
+            throw new IllegalStateException("Semantic vertex buffer has a mismatched vertex count");
         }
 
         SemanticGpuTransport.draw(
-            format,
+            SemanticRenderPass.requireLayer(),
             semanticObservation$bufferId,
             semanticObservation$backgroundOnly,
             vertexCount,

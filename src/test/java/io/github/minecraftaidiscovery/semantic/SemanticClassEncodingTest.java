@@ -2,6 +2,7 @@ package io.github.minecraftaidiscovery.semantic;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -62,11 +63,40 @@ public class SemanticClassEncodingTest {
         );
     }
 
+    @Test
+    public void preservesClassBytesWhileValidatingCutoutCoverage() {
+        assertEquals(444, SemanticClassEncoding.decodeGpuBytes(0xBC, 0x01));
+        assertEquals(662, SemanticClassEncoding.decodeGpuBytes(0x96, 0x02));
+        assertFalse(SemanticClassEncoding.cutoutAlphaSurvives(127));
+        assertTrue(SemanticClassEncoding.cutoutAlphaSurvives(128));
+
+        SemanticClassEncoding.requireValidGpuPixel(0, 0, 0);
+        SemanticClassEncoding.requireValidGpuPixel(444, 0, 128);
+        SemanticClassEncoding.requireValidGpuPixel(662, 0, 255);
+        expectIllegalState(
+            () -> SemanticClassEncoding.requireValidGpuPixel(444, 1, 255),
+            "blue guard"
+        );
+        expectIllegalState(
+            () -> SemanticClassEncoding.requireValidGpuPixel(444, 0, 127),
+            "invalid alpha"
+        );
+    }
+
     private static void expectIllegalArgument(ThrowingRunnable runnable, String expectedMessage) {
         try {
             runnable.run();
             fail("Expected IllegalArgumentException");
         } catch (IllegalArgumentException exception) {
+            assertTrue(exception.getMessage().contains(expectedMessage));
+        }
+    }
+
+    private static void expectIllegalState(ThrowingRunnable runnable, String expectedMessage) {
+        try {
+            runnable.run();
+            fail("Expected IllegalStateException");
+        } catch (IllegalStateException exception) {
             assertTrue(exception.getMessage().contains(expectedMessage));
         }
     }

@@ -35,6 +35,12 @@ public class SemanticCaptureMetadataTest {
         assertTrue(json.contains("\"format\": \"semantic-observation-v3\""));
         assertTrue(json.contains("\"renderLayers\": [\"solid\", \"cutout_mipped\", \"cutout\"]"));
         assertTrue(json.contains("\"graphicsMode\": \"fancy\""));
+        assertTrue(
+            json.contains(
+                "\"cutoutCoverage\": {\"source\": \"block atlas alpha\", "
+                    + "\"alphaFunction\": \"greater\", \"threshold\": 0.5}"
+            )
+        );
         assertTrue(json.contains("\"encoding\": \"uint16 little-endian class id\""));
         assertTrue(json.contains("\"byteLength\": 6"));
         assertTrue(json.contains(vocabulary.getFingerprintSha256()));
