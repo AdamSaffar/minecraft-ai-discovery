@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Map;
@@ -102,7 +103,9 @@ public final class SemanticCapture {
             classBuffer.length,
             visualizationPath.getFileName().toString(),
             vocabulary,
-            pixelCounts
+            pixelCounts,
+            Collections.singletonList(SemanticRenderLayer.SOLID),
+            client.options.graphicsMode.toString()
         );
 
         Files.createDirectories(captureDirectory);

@@ -2,13 +2,14 @@ package io.github.minecraftaidiscovery.semantic;
 
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 
 public final class SemanticCaptureMetadata {
-    public static final int FORMAT_VERSION = 2;
-    public static final String FORMAT_NAME = "semantic-observation-v2";
+    public static final int FORMAT_VERSION = 3;
+    public static final String FORMAT_NAME = "semantic-observation-v3";
 
     private SemanticCaptureMetadata() {
     }
@@ -20,7 +21,9 @@ public final class SemanticCaptureMetadata {
         int classBufferLength,
         String visualizationFileName,
         BlockClassVocabulary vocabulary,
-        Map<Integer, Long> pixelCounts
+        Map<Integer, Long> pixelCounts,
+        List<SemanticRenderLayer> renderLayers,
+        String graphicsMode
     ) {
         if (vocabulary == null) {
             throw new IllegalArgumentException("Block class vocabulary is missing");
@@ -30,6 +33,8 @@ public final class SemanticCaptureMetadata {
         }
         requireFileName("class buffer", classBufferFileName);
         requireFileName("visualization", visualizationFileName);
+        SemanticRenderLayer.requireCanonicalOrder(renderLayers);
+        requireGraphicsMode(graphicsMode);
         int expectedLength = SemanticClassEncoding.expectedBufferLength(width, height);
         if (classBufferLength != expectedLength) {
             throw new IllegalArgumentException(
@@ -71,6 +76,8 @@ public final class SemanticCaptureMetadata {
         json.append("  \"width\": ").append(width).append(",\n");
         json.append("  \"height\": ").append(height).append(",\n");
         appendString(json, "pixelOrder", SemanticClassEncoding.PIXEL_ORDER, true, 2);
+        appendRenderLayers(json, renderLayers);
+        appendString(json, "graphicsMode", graphicsMode, true, 2);
         json.append("  \"backgroundClassId\": ").append(BlockClassManifest.BACKGROUND_CLASS_ID).append(",\n");
         json.append("  \"manifest\": {\"entryCount\": ").append(vocabulary.getEntryCount())
             .append(", \"sha256\": \"").append(vocabulary.getFingerprintSha256()).append("\"},\n");
@@ -107,6 +114,25 @@ public final class SemanticCaptureMetadata {
         json.append("  ]\n");
         json.append("}\n");
         return json.toString();
+    }
+
+    private static void appendRenderLayers(StringBuilder json, List<SemanticRenderLayer> renderLayers) {
+        json.append("  \"renderLayers\": [");
+        for (int index = 0; index < renderLayers.size(); index++) {
+            if (index > 0) {
+                json.append(", ");
+            }
+            json.append('"').append(renderLayers.get(index).getMetadataName()).append('"');
+        }
+        json.append("],\n");
+    }
+
+    private static void requireGraphicsMode(String graphicsMode) {
+        if (!"fast".equals(graphicsMode)
+            && !"fancy".equals(graphicsMode)
+            && !"fabulous".equals(graphicsMode)) {
+            throw new IllegalArgumentException("Unsupported graphics mode: " + graphicsMode);
+        }
     }
 
     private static void requireFileName(String name, String value) {
