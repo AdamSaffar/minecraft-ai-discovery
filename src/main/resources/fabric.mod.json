@@ -5,6 +5,11 @@
   "name": "Semantic Observation Proof of Concept",
   "description": "Renderer-derived semantic output experiment for opaque blocks.",
   "environment": "client",
+  "entrypoints": {
+    "client": [
+      "io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestClient"
+    ]
+  },
   "mixins": [
     "semantic_observation_poc.mixins.json"
   ],
