@@ -14,6 +14,7 @@ public final class BlockClassManifestClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         BlockClassManifest manifest = BlockClassManifestProbe.generate();
+        BlockClassVocabulary vocabulary = BlockClassManifestRuntime.initialize(manifest);
         try {
             Path outputPath = BlockClassManifestProbe.writeCandidate(
                 manifest,
@@ -21,8 +22,8 @@ public final class BlockClassManifestClient implements ClientModInitializer {
             );
             LOGGER.info(
                 "Wrote block class manifest candidate with {} entries and SHA-256 {} to {}",
-                manifest.getEntries().size(),
-                manifest.getFingerprintSha256(),
+                vocabulary.getEntryCount(),
+                vocabulary.getFingerprintSha256(),
                 outputPath.toAbsolutePath()
             );
         } catch (IOException exception) {
