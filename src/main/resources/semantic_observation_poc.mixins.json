@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_8",
   "client": [
     "BufferBuilderMixin",
+    "BufferBuilderStateMixin",
     "ChunkRebuildTaskMixin",
     "KeyboardMixin",
     "VertexBufferMixin",
