@@ -1,6 +1,8 @@
 package io.github.minecraftaidiscovery.semantic.mixin;
 
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureRequests;
+import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCaptureRequests;
+import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeConfiguration;
 import net.minecraft.client.Keyboard;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.LiteralText;
@@ -34,6 +36,17 @@ abstract class KeyboardMixin {
             && client.currentScreen == null) {
             SemanticCaptureRequests.request();
             client.inGameHud.getChatHud().addMessage(new LiteralText("Semantic capture queued"));
+        }
+        if (window == client.getWindow().getHandle()
+            && key == GLFW.GLFW_KEY_F9
+            && action == GLFW.GLFW_PRESS
+            && client.world != null
+            && client.currentScreen == null
+            && TranslucentProbeConfiguration.isEnabled()) {
+            TranslucentProbeCaptureRequests.request();
+            client.inGameHud.getChatHud().addMessage(
+                new LiteralText("Researcher translucent probe queued")
+            );
         }
     }
 }

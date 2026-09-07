@@ -42,8 +42,12 @@ java {
 }
 
 def minecraftJavaExecutable = providers.gradleProperty('minecraftJavaExecutable')
+def translucentProbe = providers.gradleProperty('translucentProbe')
 tasks.named('runClient', JavaExec) {
     if (minecraftJavaExecutable.isPresent()) {
         executable = minecraftJavaExecutable.get()
+    }
+    if (translucentProbe.isPresent()) {
+        systemProperty 'semanticObservation.translucentProbe', translucentProbe.get()
     }
 }
