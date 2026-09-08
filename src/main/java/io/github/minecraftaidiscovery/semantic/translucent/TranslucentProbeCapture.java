@@ -1,0 +1,507 @@
+package io.github.minecraftaidiscovery.semantic.translucent;
+
+import io.github.minecraftaidiscovery.semantic.SemanticClassEncoding;
+import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
+import io.github.minecraftaidiscovery.semantic.SemanticRenderLayer;
+import io.github.minecraftaidiscovery.semantic.SemanticRenderPass;
+import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
+import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntime;
+import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
+import java.io.IOException;
+import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
+import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gl.Framebuffer;
+import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.texture.NativeImage;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+
+public final class TranslucentProbeCapture {
+    public static final int WIDTH = 640;
+    public static final int HEIGHT = 360;
+
+    private static final int LAYER_RECORD_BYTES_PER_PIXEL = 8;
+    private static final AtomicInteger CAPTURE_SEQUENCE = new AtomicInteger();
+
+    private TranslucentProbeCapture() {
+    }
+
+    public static Path capture(
+        MinecraftClient client,
+        String cameraMedium,
+        Consumer<RenderLayer> renderLayer
+    ) throws IOException {
+        if (!TranslucentProbeConfiguration.isEnabled()) {
+            throw new IllegalStateException("Translucent probe is not enabled");
+        }
+        if (client == null || renderLayer == null) {
+            throw new IllegalArgumentException("Translucent probe capture input is missing");
+        }
+
+        Framebuffer mainFramebuffer = client.getFramebuffer();
+        List<Framebuffer> framebuffers = new ArrayList<>();
+        BlockClassVocabulary vocabulary = BlockClassManifestRuntime.require();
+        Path captureDirectory = client.runDirectory.toPath()
+            .resolve("semantic-observation")
+            .resolve("translucent-probe")
+            .resolve(captureStem());
+
+        try {
+            Framebuffer base = framebuffer(framebuffers);
+            prepare(base, null);
+            for (SemanticRenderLayer layer : SemanticRenderLayer.supportedInOrder()) {
+                SemanticRenderPass.run(
+                    layer,
+                    () -> renderLayer.accept(SemanticMinecraftRenderLayers.requireMinecraftLayer(layer))
+                );
+            }
+            int[] baseClassIds = readBaseClasses(base, vocabulary);
+            float[] baseDepth = readDepth(base);
+
+            // Lava uses the fluid renderer but Minecraft 1.16.1 routes it through the solid layer.
+            Framebuffer solidFluidTarget = framebuffer(framebuffers);
+            prepare(solidFluidTarget, base);
+            renderProbeLayer(
+                RenderLayer.getSolid(),
+                TranslucentProbePassMode.SOLID_FLUID,
+                solidFluidTarget,
+                -1,
+                renderLayer
+            );
+            TranslucentProbeLayer solidFluid = readLayer(solidFluidTarget, vocabulary);
+
+            List<TranslucentProbeLayer> storedLayers = new ArrayList<>();
+            Framebuffer previous = null;
+            TranslucentProbeLayer overflowLayer = null;
+            // The extra peel is an overflow detector and is never serialized as an additional candidate slot.
+            int passCount = TranslucentProbeCandidates.TEMPORARY_STORAGE_CAPACITY + 1;
+            for (int pass = 0; pass < passCount; pass++) {
+                Framebuffer target = framebuffer(framebuffers);
+                prepare(target, base);
+                TranslucentProbePassMode mode = pass == 0
+                    ? TranslucentProbePassMode.FRONTMOST
+                    : TranslucentProbePassMode.DEPTH_PEEL;
+                renderProbeLayer(
+                    RenderLayer.getTranslucent(),
+                    mode,
+                    target,
+                    previous == null ? -1 : previous.depthAttachment,
+                    renderLayer
+                );
+                TranslucentProbeLayer layer = readLayer(target, vocabulary);
+                if (pass < TranslucentProbeCandidates.TEMPORARY_STORAGE_CAPACITY) {
+                    storedLayers.add(layer);
+                } else {
+                    overflowLayer = layer;
+                }
+                previous = target;
+            }
+            TranslucentProbeCandidates candidates = TranslucentProbeCandidates.generate(
+                storedLayers,
+                overflowLayer
+            );
+
+            Framebuffer opacityTarget = framebuffer(framebuffers);
+            prepare(opacityTarget, base);
+            renderProbeLayer(
+                RenderLayer.getTranslucent(),
+                TranslucentProbePassMode.ACCUMULATED_OPACITY,
+                opacityTarget,
+                -1,
+                renderLayer
+            );
+            byte[] accumulatedOpacity = readColorChannel(opacityTarget, ColorChannel.ALPHA);
+
+            Framebuffer countTarget = framebuffer(framebuffers);
+            prepare(countTarget, base);
+            renderProbeLayer(
+                RenderLayer.getTranslucent(),
+                TranslucentProbePassMode.ACCEPTED_FRAGMENT_COUNT,
+                countTarget,
+                -1,
+                renderLayer
+            );
+            byte[] acceptedFragmentCount = readColorChannel(countTarget, ColorChannel.RED);
+
+            return writeCapture(
+                captureDirectory,
+                client.options.graphicsMode.toString(),
+                cameraMedium,
+                client.getResourcePackManager().getEnabledNames(),
+                vocabulary,
+                baseClassIds,
+                baseDepth,
+                solidFluid,
+                storedLayers,
+                candidates,
+                accumulatedOpacity,
+                acceptedFragmentCount
+            );
+        } finally {
+            for (int index = framebuffers.size() - 1; index >= 0; index--) {
+                framebuffers.get(index).delete();
+            }
+            mainFramebuffer.beginWrite(true);
+        }
+    }
+
+    private static Path writeCapture(
+        Path captureDirectory,
+        String graphicsMode,
+        String cameraMedium,
+        Collection<String> resourcePacks,
+        BlockClassVocabulary vocabulary,
+        int[] baseClassIds,
+        float[] baseDepth,
+        TranslucentProbeLayer solidFluid,
+        List<TranslucentProbeLayer> storedLayers,
+        TranslucentProbeCandidates candidates,
+        byte[] accumulatedOpacity,
+        byte[] acceptedFragmentCount
+    ) throws IOException {
+        Files.createDirectories(captureDirectory);
+        byte[] baseClasses = SemanticClassEncoding.encodeU16Le(WIDTH, HEIGHT, baseClassIds);
+        byte[] encodedBaseDepth = TranslucentProbeBufferEncoding.encodeFloat32Le(
+            WIDTH,
+            HEIGHT,
+            baseDepth
+        );
+        byte[] encodedSolidFluid = TranslucentProbeBufferEncoding.encodeLayer(solidFluid);
+        byte[] frontToBack = candidates.getFrontToBack();
+        byte[] ranked = candidates.getContributionRanked();
+        byte[] overflow = candidates.getOverflow();
+        accumulatedOpacity = TranslucentProbeBufferEncoding.requireU8(
+            WIDTH,
+            HEIGHT,
+            accumulatedOpacity
+        );
+        acceptedFragmentCount = TranslucentProbeBufferEncoding.requireU8(
+            WIDTH,
+            HEIGHT,
+            acceptedFragmentCount
+        );
+
+        String baseClassesFile = "base.classes.u16le";
+        String baseDepthFile = "base.depth.f32le";
+        String solidFluidFile = "solid-fluid.frontmost.bin";
+        String frontToBackFile = "translucent.front-to-back.bin";
+        String rankedFile = "translucent.contribution-ranked.bin";
+        String opacityFile = "translucent.accumulated-opacity.u8";
+        String countFile = "translucent.accepted-fragment-count.u8";
+        String overflowFile = "translucent.storage-overflow.u8";
+        String baseVisualizationFile = "base.png";
+        String nearestVisualizationFile = "translucent-frontmost.png";
+
+        write(captureDirectory, baseClassesFile, baseClasses);
+        write(captureDirectory, baseDepthFile, encodedBaseDepth);
+        write(captureDirectory, solidFluidFile, encodedSolidFluid);
+        write(captureDirectory, frontToBackFile, frontToBack);
+        write(captureDirectory, rankedFile, ranked);
+        write(captureDirectory, opacityFile, accumulatedOpacity);
+        write(captureDirectory, countFile, acceptedFragmentCount);
+        write(captureDirectory, overflowFile, overflow);
+        writeVisualization(captureDirectory.resolve(baseVisualizationFile), baseClassIds);
+        writeVisualization(
+            captureDirectory.resolve(nearestVisualizationFile),
+            storedLayers.get(0).copyClassIds()
+        );
+
+        LinkedHashMap<String, TranslucentProbeMetadata.Artifact> artifacts = new LinkedHashMap<>();
+        artifacts.put(
+            "baseClasses",
+            artifact(baseClassesFile, SemanticClassEncoding.CLASS_BUFFER_ENCODING, 2, baseClasses)
+        );
+        artifacts.put(
+            "baseDepth",
+            artifact(baseDepthFile, TranslucentProbeBufferEncoding.DEPTH_ENCODING, 4, encodedBaseDepth)
+        );
+        artifacts.put(
+            "solidFluidFrontmost",
+            artifact(
+                solidFluidFile,
+                "uint16le class, uint8 source, uint8 sampled alpha, float32le window depth",
+                LAYER_RECORD_BYTES_PER_PIXEL,
+                encodedSolidFluid
+            )
+        );
+        artifacts.put(
+            "frontToBackCandidates",
+            artifact(
+                frontToBackFile,
+                TranslucentProbeCandidates.FRONT_TO_BACK_ENCODING,
+                TranslucentProbeCandidates.TEMPORARY_STORAGE_CAPACITY
+                    * TranslucentProbeCandidates.BYTES_PER_SLOT,
+                frontToBack
+            )
+        );
+        artifacts.put(
+            "contributionRankedCandidates",
+            artifact(
+                rankedFile,
+                TranslucentProbeCandidates.CONTRIBUTION_RANKED_ENCODING,
+                TranslucentProbeCandidates.TEMPORARY_STORAGE_CAPACITY
+                    * TranslucentProbeCandidates.BYTES_PER_SLOT,
+                ranked
+            )
+        );
+        artifacts.put("accumulatedOpacity", artifact(opacityFile, "uint8", 1, accumulatedOpacity));
+        artifacts.put(
+            "acceptedFragmentCount",
+            artifact(countFile, "uint8 saturated at 255", 1, acceptedFragmentCount)
+        );
+        artifacts.put("storageOverflow", artifact(overflowFile, "uint8 boolean", 1, overflow));
+
+        long saturatedFragmentCountPixels = countValue(acceptedFragmentCount, 0xFF);
+        String metadata = TranslucentProbeMetadata.toJson(
+            WIDTH,
+            HEIGHT,
+            graphicsMode,
+            cameraMedium,
+            resourcePacks,
+            vocabulary,
+            artifacts,
+            baseVisualizationFile,
+            nearestVisualizationFile,
+            candidates.getOverflowPixelCount(),
+            saturatedFragmentCountPixels,
+            observedClasses(solidFluid, storedLayers)
+        );
+        Path metadataPath = captureDirectory.resolve("metadata.json");
+        Files.write(metadataPath, metadata.getBytes(StandardCharsets.UTF_8));
+        return metadataPath;
+    }
+
+    private static Framebuffer framebuffer(List<Framebuffer> owned) {
+        Framebuffer framebuffer = new Framebuffer(
+            WIDTH,
+            HEIGHT,
+            true,
+            MinecraftClient.IS_SYSTEM_MAC
+        );
+        framebuffer.setClearColor(0.0F, 0.0F, 0.0F, 0.0F);
+        owned.add(framebuffer);
+        return framebuffer;
+    }
+
+    private static void prepare(Framebuffer target, Framebuffer baseDepth) {
+        target.clear(MinecraftClient.IS_SYSTEM_MAC);
+        if (baseDepth != null) {
+            target.copyDepthFrom(baseDepth);
+        }
+        target.beginWrite(true);
+    }
+
+    private static void renderProbeLayer(
+        RenderLayer layer,
+        TranslucentProbePassMode mode,
+        Framebuffer target,
+        int previousDepthTexture,
+        Consumer<RenderLayer> renderer
+    ) {
+        TranslucentProbeRenderPass.run(
+            layer,
+            mode,
+            target,
+            previousDepthTexture,
+            () -> renderer.accept(layer)
+        );
+    }
+
+    private static int[] readBaseClasses(
+        Framebuffer framebuffer,
+        BlockClassVocabulary vocabulary
+    ) {
+        try (NativeImage image = readColor(framebuffer)) {
+            int[] classIds = new int[Math.multiplyExact(WIDTH, HEIGHT)];
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int pixel = y * WIDTH + x;
+                    int encoded = image.getPixelColor(x, y);
+                    int classId = SemanticClassEncoding.decodeGpuBytes(
+                        NativeImage.getRed(encoded),
+                        NativeImage.getGreen(encoded)
+                    );
+                    SemanticClassEncoding.requireValidGpuPixel(
+                        classId,
+                        NativeImage.getBlue(encoded),
+                        NativeImage.getAlpha(encoded)
+                    );
+                    if (classId != BlockClassManifest.BACKGROUND_CLASS_ID) {
+                        vocabulary.requireRegistryIdentifier(classId);
+                    }
+                    classIds[pixel] = classId;
+                }
+            }
+            return classIds;
+        }
+    }
+
+    private static TranslucentProbeLayer readLayer(
+        Framebuffer framebuffer,
+        BlockClassVocabulary vocabulary
+    ) {
+        float[] depth = readDepth(framebuffer);
+        try (NativeImage image = readColor(framebuffer)) {
+            return TranslucentProbeLayer.decode(image, depth, vocabulary);
+        }
+    }
+
+    private static byte[] readColorChannel(Framebuffer framebuffer, ColorChannel channel) {
+        try (NativeImage image = readColor(framebuffer)) {
+            byte[] values = new byte[Math.multiplyExact(WIDTH, HEIGHT)];
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int encoded = image.getPixelColor(x, y);
+                    int value = channel == ColorChannel.RED
+                        ? NativeImage.getRed(encoded)
+                        : NativeImage.getAlpha(encoded);
+                    values[y * WIDTH + x] = (byte)value;
+                }
+            }
+            return values;
+        }
+    }
+
+    private static NativeImage readColor(Framebuffer framebuffer) {
+        framebuffer.beginRead();
+        try {
+            NativeImage image = new NativeImage(WIDTH, HEIGHT, false);
+            image.loadFromTextureImage(0, false);
+            image.mirrorVertically();
+            return image;
+        } finally {
+            framebuffer.endRead();
+        }
+    }
+
+    private static float[] readDepth(Framebuffer framebuffer) {
+        framebuffer.beginWrite(false);
+        int previousPackAlignment = GL11.glGetInteger(GL11.GL_PACK_ALIGNMENT);
+        FloatBuffer bottomLeft = BufferUtils.createFloatBuffer(Math.multiplyExact(WIDTH, HEIGHT));
+        try {
+            GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
+            GL11.glReadPixels(
+                0,
+                0,
+                WIDTH,
+                HEIGHT,
+                GL11.GL_DEPTH_COMPONENT,
+                GL11.GL_FLOAT,
+                bottomLeft
+            );
+        } finally {
+            GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, previousPackAlignment);
+        }
+
+        float[] topLeft = new float[Math.multiplyExact(WIDTH, HEIGHT)];
+        for (int y = 0; y < HEIGHT; y++) {
+            int sourceRow = HEIGHT - 1 - y;
+            for (int x = 0; x < WIDTH; x++) {
+                topLeft[y * WIDTH + x] = bottomLeft.get(sourceRow * WIDTH + x);
+            }
+        }
+        return topLeft;
+    }
+
+    private static Map<Integer, Long> observedClasses(
+        TranslucentProbeLayer solidFluid,
+        List<TranslucentProbeLayer> storedLayers
+    ) {
+        TreeMap<Integer, Long> observed = new TreeMap<>();
+        List<TranslucentProbeLayer> layers = new ArrayList<>(storedLayers);
+        layers.add(solidFluid);
+        for (TranslucentProbeLayer layer : layers) {
+            int pixels = Math.multiplyExact(layer.getWidth(), layer.getHeight());
+            for (int pixel = 0; pixel < pixels; pixel++) {
+                int classId = layer.getClassId(pixel);
+                if (classId != BlockClassManifest.BACKGROUND_CLASS_ID) {
+                    observed.put(classId, observed.getOrDefault(classId, 0L) + 1L);
+                }
+            }
+        }
+        return observed;
+    }
+
+    private static TranslucentProbeMetadata.Artifact artifact(
+        String fileName,
+        String encoding,
+        int bytesPerPixel,
+        byte[] data
+    ) {
+        return new TranslucentProbeMetadata.Artifact(
+            fileName,
+            encoding,
+            bytesPerPixel,
+            data.length
+        );
+    }
+
+    private static void write(Path directory, String fileName, byte[] data) throws IOException {
+        Files.write(directory.resolve(fileName), data);
+    }
+
+    private static void writeVisualization(Path path, int[] classIds) throws IOException {
+        if (classIds.length != Math.multiplyExact(WIDTH, HEIGHT)) {
+            throw new IllegalArgumentException("Visualization dimensions do not match");
+        }
+        try (NativeImage visualization = new NativeImage(WIDTH, HEIGHT, false)) {
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int classId = classIds[y * WIDTH + x];
+                    visualization.setPixelColor(
+                        x,
+                        y,
+                        toAbgr(SemanticClassEncoding.falseColorRgb(classId))
+                    );
+                }
+            }
+            visualization.writeFile(path);
+        }
+    }
+
+    private static long countValue(byte[] values, int expected) {
+        return Arrays.stream(toUnsignedInts(values)).filter(value -> value == expected).count();
+    }
+
+    private static int[] toUnsignedInts(byte[] values) {
+        int[] unsigned = new int[values.length];
+        for (int index = 0; index < values.length; index++) {
+            unsigned[index] = Byte.toUnsignedInt(values[index]);
+        }
+        return unsigned;
+    }
+
+    private static String captureStem() {
+        SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return "probe-" + format.format(new Date()) + "-" + CAPTURE_SEQUENCE.incrementAndGet();
+    }
+
+    private static int toAbgr(int rgb) {
+        int red = rgb >> 16 & 0xFF;
+        int green = rgb >> 8 & 0xFF;
+        int blue = rgb & 0xFF;
+        return 0xFF000000 | blue << 16 | green << 8 | red;
+    }
+
+    private enum ColorChannel {
+        RED,
+        ALPHA
+    }
+}

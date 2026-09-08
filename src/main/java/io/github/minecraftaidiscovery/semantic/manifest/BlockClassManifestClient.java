@@ -1,5 +1,7 @@
 package io.github.minecraftaidiscovery.semantic.manifest;
 
+import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
+import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeConfiguration;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
@@ -15,6 +17,13 @@ public final class BlockClassManifestClient implements ClientModInitializer {
     public void onInitializeClient() {
         BlockClassManifest manifest = BlockClassManifestProbe.generate();
         BlockClassVocabulary vocabulary = BlockClassManifestRuntime.initialize(manifest);
+        if (TranslucentProbeConfiguration.isEnabled()) {
+            LOGGER.info(
+                "Researcher-only translucent probe enabled at {}x{}; press F9 to capture",
+                TranslucentProbeCapture.WIDTH,
+                TranslucentProbeCapture.HEIGHT
+            );
+        }
         try {
             Path outputPath = BlockClassManifestProbe.writeCandidate(
                 manifest,
