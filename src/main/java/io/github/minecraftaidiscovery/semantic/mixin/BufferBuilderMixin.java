@@ -3,6 +3,9 @@ package io.github.minecraftaidiscovery.semantic.mixin;
 import io.github.minecraftaidiscovery.semantic.SemanticBufferBuilderExtension;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexData;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexEncoding;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionBufferBuilderExtension;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionVertexData;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionVertexEncoding;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeBufferBuilderExtension;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeBufferStateExtension;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeConfiguration;
@@ -23,7 +26,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(BufferBuilder.class)
-abstract class BufferBuilderMixin implements SemanticBufferBuilderExtension, TranslucentProbeBufferBuilderExtension {
+abstract class BufferBuilderMixin implements
+    SemanticBufferBuilderExtension,
+    TranslucentProbeBufferBuilderExtension,
+    LightingRetentionBufferBuilderExtension {
     @Shadow
     private List<BufferBuilder.DrawArrayParameters> parameters;
 
@@ -40,6 +46,10 @@ abstract class BufferBuilderMixin implements SemanticBufferBuilderExtension, Tra
     private final TranslucentProbeVertexData semanticObservation$translucentProbeVertexData =
         new TranslucentProbeVertexData();
 
+    @Unique
+    private final LightingRetentionVertexData semanticObservation$lightingRetentionVertexData =
+        new LightingRetentionVertexData();
+
     @Inject(method = "begin", at = @At("HEAD"))
     private void semanticObservation$discardAbandonedData(
         int drawMode,
@@ -49,6 +59,7 @@ abstract class BufferBuilderMixin implements SemanticBufferBuilderExtension, Tra
         if (lastParameterIndex == parameters.size()) {
             semanticObservation$vertexData.clear();
             semanticObservation$translucentProbeVertexData.clear();
+            semanticObservation$lightingRetentionVertexData.clear();
         }
     }
 
@@ -58,6 +69,9 @@ abstract class BufferBuilderMixin implements SemanticBufferBuilderExtension, Tra
         if (TranslucentProbeConfiguration.isEnabled()) {
             semanticObservation$translucentProbeVertexData.append(
                 TranslucentProbeVertexEncoding.getActive()
+            );
+            semanticObservation$lightingRetentionVertexData.append(
+                LightingRetentionVertexEncoding.consumeVertex()
             );
         }
     }
@@ -116,5 +130,10 @@ abstract class BufferBuilderMixin implements SemanticBufferBuilderExtension, Tra
     @Override
     public byte[] semanticObservation$takeTranslucentProbeVertexData(int vertexCount) {
         return semanticObservation$translucentProbeVertexData.takeVertices(vertexCount);
+    }
+
+    @Override
+    public byte[] semanticObservation$takeLightingRetentionVertexData(int vertexCount) {
+        return semanticObservation$lightingRetentionVertexData.takeVertices(vertexCount);
     }
 }

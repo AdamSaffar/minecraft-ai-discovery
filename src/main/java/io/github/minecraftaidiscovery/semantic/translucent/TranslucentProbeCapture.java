@@ -4,6 +4,9 @@ import io.github.minecraftaidiscovery.semantic.SemanticClassEncoding;
 import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderLayer;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderPass;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionBufferEncoding;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionRenderPass;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntime;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
@@ -46,12 +49,16 @@ public final class TranslucentProbeCapture {
         MinecraftClient client,
         String cameraMedium,
         FogRetentionCaptureContext fogContext,
+        LightingRetentionCaptureContext lightingContext,
         Consumer<RenderLayer> renderLayer
     ) throws IOException {
         if (!TranslucentProbeConfiguration.isEnabled()) {
             throw new IllegalStateException("Translucent probe is not enabled");
         }
-        if (client == null || fogContext == null || renderLayer == null) {
+        if (client == null
+            || fogContext == null
+            || lightingContext == null
+            || renderLayer == null) {
             throw new IllegalArgumentException("Translucent probe capture input is missing");
         }
 
@@ -61,7 +68,7 @@ public final class TranslucentProbeCapture {
         Collection<String> resourcePacks = client.getResourcePackManager().getEnabledNames();
         if (resourcePacks.size() != 1 || !resourcePacks.contains("vanilla")) {
             throw new IllegalStateException(
-                "Fog retention capture supports only the vanilla resource pack"
+                "Researcher probe supports only the vanilla resource pack"
             );
         }
         Path captureDirectory = client.runDirectory.toPath()
@@ -80,6 +87,22 @@ public final class TranslucentProbeCapture {
             }
             int[] baseClassIds = readBaseClasses(base, vocabulary);
             float[] baseDepth = readDepth(base);
+
+            Framebuffer lightingRetentionTarget = framebuffer(framebuffers);
+            prepare(lightingRetentionTarget, base);
+            for (SemanticRenderLayer layer : SemanticRenderLayer.supportedInOrder()) {
+                LightingRetentionRenderPass.run(
+                    layer,
+                    lightingRetentionTarget,
+                    () -> renderLayer.accept(
+                        SemanticMinecraftRenderLayers.requireMinecraftLayer(layer)
+                    )
+                );
+            }
+            LightingReadback lighting = readLightingRetention(
+                lightingRetentionTarget,
+                baseClassIds
+            );
 
             Framebuffer fogRetentionTarget = framebuffer(framebuffers);
             prepare(fogRetentionTarget, null);
@@ -166,9 +189,14 @@ public final class TranslucentProbeCapture {
                 cameraMedium,
                 resourcePacks,
                 fogContext,
+                lightingContext,
                 vocabulary,
                 baseClassIds,
                 baseDepth,
+                lighting.rgb,
+                lighting.validity,
+                lighting.validBasePixelCount,
+                lighting.unsupportedBasePixelCount,
                 baseFogRetention,
                 solidFluid,
                 storedLayers,
@@ -190,9 +218,14 @@ public final class TranslucentProbeCapture {
         String cameraMedium,
         Collection<String> resourcePacks,
         FogRetentionCaptureContext fogContext,
+        LightingRetentionCaptureContext lightingContext,
         BlockClassVocabulary vocabulary,
         int[] baseClassIds,
         float[] baseDepth,
+        byte[] baseLightingRetention,
+        byte[] baseLightingValidity,
+        long validLightingBasePixelCount,
+        long unsupportedLightingBasePixelCount,
         byte[] baseFogRetention,
         TranslucentProbeLayer solidFluid,
         List<TranslucentProbeLayer> storedLayers,
@@ -226,9 +259,21 @@ public final class TranslucentProbeCapture {
             HEIGHT,
             baseFogRetention
         );
+        baseLightingRetention = LightingRetentionBufferEncoding.requireRgb(
+            WIDTH,
+            HEIGHT,
+            baseLightingRetention
+        );
+        baseLightingValidity = TranslucentProbeBufferEncoding.requireU8(
+            WIDTH,
+            HEIGHT,
+            baseLightingValidity
+        );
 
         String baseClassesFile = "base.classes.u16le";
         String baseDepthFile = "base.depth.f32le";
+        String baseLightingRetentionFile = "base.lighting-retention.rgb8";
+        String baseLightingValidityFile = "base.lighting-validity.u8";
         String baseFogRetentionFile = "base.fog-retention.u8";
         String solidFluidFile = "solid-fluid.frontmost.bin";
         String frontToBackFile = "translucent.front-to-back.bin";
@@ -237,11 +282,14 @@ public final class TranslucentProbeCapture {
         String countFile = "translucent.accepted-fragment-count.u8";
         String overflowFile = "translucent.storage-overflow.u8";
         String baseVisualizationFile = "base.png";
+        String lightingRetentionVisualizationFile = "base-lighting-retention.png";
         String fogRetentionVisualizationFile = "base-fog-retention.png";
         String nearestVisualizationFile = "translucent-frontmost.png";
 
         write(captureDirectory, baseClassesFile, baseClasses);
         write(captureDirectory, baseDepthFile, encodedBaseDepth);
+        write(captureDirectory, baseLightingRetentionFile, baseLightingRetention);
+        write(captureDirectory, baseLightingValidityFile, baseLightingValidity);
         write(captureDirectory, baseFogRetentionFile, baseFogRetention);
         write(captureDirectory, solidFluidFile, encodedSolidFluid);
         write(captureDirectory, frontToBackFile, frontToBack);
@@ -250,6 +298,10 @@ public final class TranslucentProbeCapture {
         write(captureDirectory, countFile, acceptedFragmentCount);
         write(captureDirectory, overflowFile, overflow);
         writeVisualization(captureDirectory.resolve(baseVisualizationFile), baseClassIds);
+        writeRgbVisualization(
+            captureDirectory.resolve(lightingRetentionVisualizationFile),
+            baseLightingRetention
+        );
         writeGrayscaleVisualization(
             captureDirectory.resolve(fogRetentionVisualizationFile),
             baseFogRetention
@@ -267,6 +319,24 @@ public final class TranslucentProbeCapture {
         artifacts.put(
             "baseDepth",
             artifact(baseDepthFile, TranslucentProbeBufferEncoding.DEPTH_ENCODING, 4, encodedBaseDepth)
+        );
+        artifacts.put(
+            "baseLightingRetention",
+            artifact(
+                baseLightingRetentionFile,
+                LightingRetentionBufferEncoding.RGB_ENCODING,
+                LightingRetentionBufferEncoding.RGB_BYTES_PER_PIXEL,
+                baseLightingRetention
+            )
+        );
+        artifacts.put(
+            "baseLightingValidity",
+            artifact(
+                baseLightingValidityFile,
+                LightingRetentionBufferEncoding.VALIDITY_ENCODING,
+                1,
+                baseLightingValidity
+            )
         );
         artifacts.put(
             "baseFogRetention",
@@ -321,11 +391,15 @@ public final class TranslucentProbeCapture {
             cameraMedium,
             resourcePacks,
             fogContext,
+            lightingContext,
             vocabulary,
             artifacts,
             baseVisualizationFile,
+            lightingRetentionVisualizationFile,
             fogRetentionVisualizationFile,
             nearestVisualizationFile,
+            validLightingBasePixelCount,
+            unsupportedLightingBasePixelCount,
             candidates.getOverflowPixelCount(),
             saturatedFragmentCountPixels,
             observedClasses(solidFluid, storedLayers)
@@ -461,6 +535,58 @@ public final class TranslucentProbeCapture {
         }
     }
 
+    private static LightingReadback readLightingRetention(
+        Framebuffer framebuffer,
+        int[] baseClassIds
+    ) {
+        int pixels = Math.multiplyExact(WIDTH, HEIGHT);
+        if (baseClassIds.length != pixels) {
+            throw new IllegalArgumentException("Base class buffer dimensions do not match");
+        }
+        try (NativeImage image = readColor(framebuffer)) {
+            byte[] rgb = new byte[Math.multiplyExact(pixels, 3)];
+            byte[] renderedAlpha = new byte[pixels];
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int pixel = y * WIDTH + x;
+                    int encoded = image.getPixelColor(x, y);
+                    renderedAlpha[pixel] = (byte)NativeImage.getAlpha(encoded);
+                }
+            }
+            byte[] validity = LightingRetentionBufferEncoding.validityForSupportedBase(
+                WIDTH,
+                HEIGHT,
+                baseClassIds,
+                renderedAlpha
+            );
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int pixel = y * WIDTH + x;
+                    if (validity[pixel] == 0) {
+                        continue;
+                    }
+                    int encoded = image.getPixelColor(x, y);
+                    int offset = pixel * LightingRetentionBufferEncoding.RGB_BYTES_PER_PIXEL;
+                    rgb[offset] = (byte)NativeImage.getRed(encoded);
+                    rgb[offset + 1] = (byte)NativeImage.getGreen(encoded);
+                    rgb[offset + 2] = (byte)NativeImage.getBlue(encoded);
+                }
+            }
+            long validBasePixelCount = countValue(validity, 0xFF);
+            long positiveBasePixelCount = Arrays.stream(baseClassIds)
+                .filter(classId -> classId != BlockClassManifest.BACKGROUND_CLASS_ID)
+                .count();
+            // Unsupported emitters stay invalid instead of becoming indistinguishable from darkness.
+            long unsupportedBasePixelCount = positiveBasePixelCount - validBasePixelCount;
+            return new LightingReadback(
+                rgb,
+                validity,
+                validBasePixelCount,
+                unsupportedBasePixelCount
+            );
+        }
+    }
+
     private static NativeImage readColor(Framebuffer framebuffer) {
         framebuffer.beginRead();
         try {
@@ -575,6 +701,27 @@ public final class TranslucentProbeCapture {
         }
     }
 
+    private static void writeRgbVisualization(Path path, byte[] values) throws IOException {
+        LightingRetentionBufferEncoding.requireRgb(WIDTH, HEIGHT, values);
+        try (NativeImage visualization = new NativeImage(WIDTH, HEIGHT, false)) {
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int offset = (y * WIDTH + x)
+                        * LightingRetentionBufferEncoding.RGB_BYTES_PER_PIXEL;
+                    int red = Byte.toUnsignedInt(values[offset]);
+                    int green = Byte.toUnsignedInt(values[offset + 1]);
+                    int blue = Byte.toUnsignedInt(values[offset + 2]);
+                    visualization.setPixelColor(
+                        x,
+                        y,
+                        0xFF000000 | blue << 16 | green << 8 | red
+                    );
+                }
+            }
+            visualization.writeFile(path);
+        }
+    }
+
     private static long countValue(byte[] values, int expected) {
         return Arrays.stream(toUnsignedInts(values)).filter(value -> value == expected).count();
     }
@@ -603,5 +750,24 @@ public final class TranslucentProbeCapture {
     private enum ColorChannel {
         RED,
         ALPHA
+    }
+
+    private static final class LightingReadback {
+        private final byte[] rgb;
+        private final byte[] validity;
+        private final long validBasePixelCount;
+        private final long unsupportedBasePixelCount;
+
+        private LightingReadback(
+            byte[] rgb,
+            byte[] validity,
+            long validBasePixelCount,
+            long unsupportedBasePixelCount
+        ) {
+            this.rgb = rgb;
+            this.validity = validity;
+            this.validBasePixelCount = validBasePixelCount;
+            this.unsupportedBasePixelCount = unsupportedBasePixelCount;
+        }
     }
 }
