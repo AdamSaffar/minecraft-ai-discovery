@@ -3,6 +3,7 @@ package io.github.minecraftaidiscovery.semantic.mixin;
 import io.github.minecraftaidiscovery.semantic.SemanticCapture;
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureRequests;
 import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
+import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCaptureRequests;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeFluidIdentity;
@@ -55,7 +56,12 @@ abstract class WorldRendererMixin {
         CallbackInfo callback
     ) {
         if (!SemanticCaptureRequests.consume()) {
-            semanticObservation$captureTranslucentProbe(matrices, camera);
+            semanticObservation$captureTranslucentProbe(
+                matrices,
+                camera,
+                gameRenderer,
+                projectionMatrix
+            );
             return;
         }
 
@@ -79,12 +85,19 @@ abstract class WorldRendererMixin {
             SEMANTIC_OBSERVATION_LOGGER.error("Semantic capture failed", exception);
             client.inGameHud.getChatHud().addMessage(new LiteralText("Semantic capture failed; see latest.log"));
         }
-        semanticObservation$captureTranslucentProbe(matrices, camera);
+        semanticObservation$captureTranslucentProbe(
+            matrices,
+            camera,
+            gameRenderer,
+            projectionMatrix
+        );
     }
 
     private void semanticObservation$captureTranslucentProbe(
         MatrixStack matrices,
-        Camera camera
+        Camera camera,
+        GameRenderer gameRenderer,
+        Matrix4f projectionMatrix
     ) {
         if (!TranslucentProbeCaptureRequests.consume()) {
             return;
@@ -94,9 +107,16 @@ abstract class WorldRendererMixin {
         Vec3d cameraPosition = camera.getPos();
         String cameraMedium = semanticObservation$cameraMedium(camera);
         try {
+            FogRetentionCaptureContext fogContext = FogRetentionCaptureContext.capture(
+                client,
+                camera,
+                gameRenderer,
+                projectionMatrix
+            );
             Path metadataPath = TranslucentProbeCapture.capture(
                 client,
                 cameraMedium,
+                fogContext,
                 layer -> renderLayer(
                     layer,
                     matrices,

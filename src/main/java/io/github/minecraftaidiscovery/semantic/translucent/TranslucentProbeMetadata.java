@@ -10,8 +10,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public final class TranslucentProbeMetadata {
-    public static final int FORMAT_VERSION = 1;
-    public static final String FORMAT_NAME = "translucent-observation-probe-v1";
+    public static final int FORMAT_VERSION = 2;
+    public static final String FORMAT_NAME = "translucent-observation-probe-v2";
 
     private TranslucentProbeMetadata() {
     }
@@ -22,9 +22,11 @@ public final class TranslucentProbeMetadata {
         String graphicsMode,
         String cameraMedium,
         Collection<String> resourcePacks,
+        FogRetentionCaptureContext fogContext,
         BlockClassVocabulary vocabulary,
         Map<String, Artifact> artifacts,
         String baseVisualization,
+        String fogRetentionVisualization,
         String nearestVisualization,
         long overflowPixelCount,
         long saturatedFragmentCountPixels,
@@ -39,10 +41,11 @@ public final class TranslucentProbeMetadata {
         if (resourcePacks == null || resourcePacks.isEmpty()) {
             throw new IllegalArgumentException("Active resource packs are missing");
         }
-        if (vocabulary == null || artifacts == null || artifacts.isEmpty()) {
+        if (fogContext == null || vocabulary == null || artifacts == null || artifacts.isEmpty()) {
             throw new IllegalArgumentException("Translucent probe metadata input is missing");
         }
         requireFileName(baseVisualization);
+        requireFileName(fogRetentionVisualization);
         requireFileName(nearestVisualization);
         requirePixelCount("overflow", overflowPixelCount, pixels);
         requirePixelCount("fragment-count saturation", saturatedFragmentCountPixels, pixels);
@@ -94,6 +97,7 @@ public final class TranslucentProbeMetadata {
         appendStringArray(json, "resourcePacks", resourcePacks);
         json.append("  \"manifest\": {\"entryCount\": ").append(vocabulary.getEntryCount())
             .append(", \"sha256\": \"").append(vocabulary.getFingerprintSha256()).append("\"},\n");
+        appendFogRetention(json, fogContext);
         json.append("  \"renderEvidence\": {\n");
         json.append("    \"baseLayers\": [\"solid\", \"cutout_mipped\", \"cutout\"],\n");
         json.append("    \"translucentLayer\": \"translucent\",\n");
@@ -114,6 +118,7 @@ public final class TranslucentProbeMetadata {
         json.append("    \"sampledAlpha\": \"uint8 block-atlas sample, researcher-only\",\n");
         json.append("    \"accumulatedOpacity\": \"uint8 source-over alpha, researcher-only\",\n");
         json.append("    \"acceptedFragmentCount\": \"uint8 saturated at 255, researcher-only\",\n");
+        json.append("    \"baseFogRetention\": \"uint8 fixed-function factor, researcher-only\",\n");
         json.append("    \"saturatedFragmentCountPixels\": ").append(saturatedFragmentCountPixels)
             .append(",\n");
         json.append("    \"zeroAlphaPolicy\": \"discarded and explicitly excluded from vanilla zero-alpha depth-write equivalence\"\n");
@@ -142,7 +147,9 @@ public final class TranslucentProbeMetadata {
         }
         json.append("  },\n");
         json.append("  \"visualizations\": {\"base\": \"")
-            .append(escape(baseVisualization)).append("\", \"frontmostTranslucent\": \"")
+            .append(escape(baseVisualization)).append("\", \"baseFogRetention\": \"")
+            .append(escape(fogRetentionVisualization))
+            .append("\", \"frontmostTranslucent\": \"")
             .append(escape(nearestVisualization)).append("\", \"colors\": ")
             .append("\"deterministic class-id hash; diagnostic only\"},\n");
         json.append("  \"observedContributionClasses\": [\n");
@@ -158,6 +165,62 @@ public final class TranslucentProbeMetadata {
         json.append("  ]\n");
         json.append("}\n");
         return json.toString();
+    }
+
+    private static void appendFogRetention(
+        StringBuilder json,
+        FogRetentionCaptureContext context
+    ) {
+        FogRetentionParameters parameters = context.getParameters();
+        json.append("  \"baseFogRetention\": {\n");
+        json.append("    \"coverage\": \"winning solid, cutout_mipped, or cutout terrain fragment\",\n");
+        json.append("    \"method\": \"Minecraft fixed-function fog over white terrain and black fog color\",\n");
+        json.append("    \"quantization\": \"normalized uint8 framebuffer readback\",\n");
+        json.append("    \"supportedGraphicsModes\": [\"fast\", \"fancy\"],\n");
+        json.append("    \"resourcePackPolicy\": \"vanilla only\",\n");
+        json.append("    \"postShaderPolicy\": \"none loaded\",\n");
+        appendString(json, "fogType", "terrain", true, 4);
+        appendString(json, "mode", parameters.getMode().getMetadataName(), true, 4);
+        json.append("    \"density\": ").append(parameters.getDensity()).append(",\n");
+        json.append("    \"start\": ").append(parameters.getStart()).append(",\n");
+        json.append("    \"end\": ").append(parameters.getEnd()).append(",\n");
+        appendString(
+            json,
+            "distanceMode",
+            parameters.getDistanceMode().getMetadataName(),
+            true,
+            4
+        );
+        json.append("    \"nvFogDistanceSupported\": ")
+            .append(parameters.isNvFogDistanceSupported()).append(",\n");
+        json.append("    \"underwaterVisibility\": ")
+            .append(context.getUnderwaterVisibility()).append(",\n");
+        json.append("    \"waterBiomeDensityModifier\": ")
+            .append(context.getBiomeDensityModifier()).append(",\n");
+        json.append("    \"viewDistanceChunks\": ")
+            .append(context.getViewDistanceChunks()).append(",\n");
+        json.append("    \"terrainFogViewDistance\": ")
+            .append(context.getTerrainFogViewDistance()).append(",\n");
+        appendString(json, "perspective", context.getPerspective(), true, 4);
+        json.append("    \"thickFog\": ").append(context.isThickFog()).append(",\n");
+        json.append("    \"skyFogAppliedEarlier\": ")
+            .append(context.isSkyFogApplied()).append(",\n");
+        json.append("    \"statusEffects\": {\"blindness\": ")
+            .append(context.hasBlindness()).append(", \"blindnessDurationTicks\": ")
+            .append(context.getBlindnessDurationTicks()).append(", \"fireResistance\": ")
+            .append(context.hasFireResistance()).append(", \"nausea\": ")
+            .append(context.hasNausea()).append(", \"nightVision\": ")
+            .append(context.hasNightVision()).append("},\n");
+        json.append("    \"projectionMatrixColumnMajor\": [");
+        float[] projection = context.copyProjectionMatrix();
+        for (int index = 0; index < projection.length; index++) {
+            if (index > 0) {
+                json.append(", ");
+            }
+            json.append(projection[index]);
+        }
+        json.append("]\n");
+        json.append("  },\n");
     }
 
     private static void appendStringArray(

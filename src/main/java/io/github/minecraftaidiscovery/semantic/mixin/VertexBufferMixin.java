@@ -7,6 +7,8 @@ import io.github.minecraftaidiscovery.semantic.SemanticGpuTransport;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderPass;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexData;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntime;
+import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionGpuTransport;
+import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionRenderPass;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeBufferBuilderExtension;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeConfiguration;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeGpuTransport;
@@ -153,6 +155,16 @@ abstract class VertexBufferMixin {
 
     @Inject(method = "draw", at = @At("HEAD"), cancellable = true)
     private void semanticObservation$drawSidecar(Matrix4f matrix, int mode, CallbackInfo callback) {
+        if (FogRetentionRenderPass.isActive()) {
+            FogRetentionGpuTransport.draw(
+                FogRetentionRenderPass.requireContext(),
+                vertexCount,
+                matrix,
+                mode
+            );
+            callback.cancel();
+            return;
+        }
         if (TranslucentProbeRenderPass.isActive()) {
             semanticObservation$drawTranslucentProbe(matrix, mode);
             callback.cancel();

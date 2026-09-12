@@ -34,16 +34,26 @@ public class TranslucentProbeMetadataTest {
             "fancy",
             "minecraft:water",
             Arrays.asList("vanilla"),
+            FogRetentionCaptureContext.createForTesting(
+                FogRetentionParameters.createForTesting(
+                    FogRetentionParameters.Mode.EXP2,
+                    FogRetentionParameters.DistanceMode.NV_EYE_RADIAL,
+                    0.04F,
+                    0.0F,
+                    1.0F
+                )
+            ),
             vocabulary,
             artifacts,
             "base.png",
+            "base-fog-retention.png",
             "translucent-frontmost.png",
             3,
             1,
             observed
         );
 
-        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v1\""));
+        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v2\""));
         assertTrue(json.contains("\"experimental\": true"));
         assertTrue(json.contains("\"researcherOnly\": true"));
         assertTrue(json.contains("\"agentVisible\": false"));
@@ -53,6 +63,9 @@ public class TranslucentProbeMetadataTest {
         assertTrue(json.contains("\"productionK\": false"));
         assertTrue(json.contains("\"minecraft:water\": 3"));
         assertTrue(json.contains("\"minecraft:lava\": 2"));
+        assertTrue(json.contains("\"mode\": \"exp2\""));
+        assertTrue(json.contains("\"distanceMode\": \"nv_eye_radial\""));
+        assertTrue(json.contains("\"baseFogRetention\": \"base-fog-retention.png\""));
         assertTrue(json.contains(vocabulary.getFingerprintSha256()));
         assertFalse(json.contains("diagnosticRawId"));
     }
@@ -65,9 +78,19 @@ public class TranslucentProbeMetadataTest {
             "fast",
             "none",
             Arrays.asList("vanilla"),
+            FogRetentionCaptureContext.createForTesting(
+                FogRetentionParameters.createForTesting(
+                    FogRetentionParameters.Mode.LINEAR,
+                    FogRetentionParameters.DistanceMode.STANDARD_EYE_PLANE_ABSOLUTE,
+                    0.0F,
+                    24.0F,
+                    32.0F
+                )
+            ),
             vocabulary(),
             new LinkedHashMap<>(),
             "base.png",
+            "fog.png",
             "front.png",
             0,
             0,

@@ -45,18 +45,25 @@ public final class TranslucentProbeCapture {
     public static Path capture(
         MinecraftClient client,
         String cameraMedium,
+        FogRetentionCaptureContext fogContext,
         Consumer<RenderLayer> renderLayer
     ) throws IOException {
         if (!TranslucentProbeConfiguration.isEnabled()) {
             throw new IllegalStateException("Translucent probe is not enabled");
         }
-        if (client == null || renderLayer == null) {
+        if (client == null || fogContext == null || renderLayer == null) {
             throw new IllegalArgumentException("Translucent probe capture input is missing");
         }
 
         Framebuffer mainFramebuffer = client.getFramebuffer();
         List<Framebuffer> framebuffers = new ArrayList<>();
         BlockClassVocabulary vocabulary = BlockClassManifestRuntime.require();
+        Collection<String> resourcePacks = client.getResourcePackManager().getEnabledNames();
+        if (resourcePacks.size() != 1 || !resourcePacks.contains("vanilla")) {
+            throw new IllegalStateException(
+                "Fog retention capture supports only the vanilla resource pack"
+            );
+        }
         Path captureDirectory = client.runDirectory.toPath()
             .resolve("semantic-observation")
             .resolve("translucent-probe")
@@ -73,6 +80,20 @@ public final class TranslucentProbeCapture {
             }
             int[] baseClassIds = readBaseClasses(base, vocabulary);
             float[] baseDepth = readDepth(base);
+
+            Framebuffer fogRetentionTarget = framebuffer(framebuffers);
+            prepare(fogRetentionTarget, null);
+            for (SemanticRenderLayer layer : SemanticRenderLayer.supportedInOrder()) {
+                FogRetentionRenderPass.run(
+                    layer,
+                    fogRetentionTarget,
+                    fogContext.getParameters(),
+                    () -> renderLayer.accept(
+                        SemanticMinecraftRenderLayers.requireMinecraftLayer(layer)
+                    )
+                );
+            }
+            byte[] baseFogRetention = readFogRetention(fogRetentionTarget, baseClassIds);
 
             // Lava uses the fluid renderer but Minecraft 1.16.1 routes it through the solid layer.
             Framebuffer solidFluidTarget = framebuffer(framebuffers);
@@ -143,10 +164,12 @@ public final class TranslucentProbeCapture {
                 captureDirectory,
                 client.options.graphicsMode.toString(),
                 cameraMedium,
-                client.getResourcePackManager().getEnabledNames(),
+                resourcePacks,
+                fogContext,
                 vocabulary,
                 baseClassIds,
                 baseDepth,
+                baseFogRetention,
                 solidFluid,
                 storedLayers,
                 candidates,
@@ -166,9 +189,11 @@ public final class TranslucentProbeCapture {
         String graphicsMode,
         String cameraMedium,
         Collection<String> resourcePacks,
+        FogRetentionCaptureContext fogContext,
         BlockClassVocabulary vocabulary,
         int[] baseClassIds,
         float[] baseDepth,
+        byte[] baseFogRetention,
         TranslucentProbeLayer solidFluid,
         List<TranslucentProbeLayer> storedLayers,
         TranslucentProbeCandidates candidates,
@@ -196,9 +221,15 @@ public final class TranslucentProbeCapture {
             HEIGHT,
             acceptedFragmentCount
         );
+        baseFogRetention = TranslucentProbeBufferEncoding.requireU8(
+            WIDTH,
+            HEIGHT,
+            baseFogRetention
+        );
 
         String baseClassesFile = "base.classes.u16le";
         String baseDepthFile = "base.depth.f32le";
+        String baseFogRetentionFile = "base.fog-retention.u8";
         String solidFluidFile = "solid-fluid.frontmost.bin";
         String frontToBackFile = "translucent.front-to-back.bin";
         String rankedFile = "translucent.contribution-ranked.bin";
@@ -206,10 +237,12 @@ public final class TranslucentProbeCapture {
         String countFile = "translucent.accepted-fragment-count.u8";
         String overflowFile = "translucent.storage-overflow.u8";
         String baseVisualizationFile = "base.png";
+        String fogRetentionVisualizationFile = "base-fog-retention.png";
         String nearestVisualizationFile = "translucent-frontmost.png";
 
         write(captureDirectory, baseClassesFile, baseClasses);
         write(captureDirectory, baseDepthFile, encodedBaseDepth);
+        write(captureDirectory, baseFogRetentionFile, baseFogRetention);
         write(captureDirectory, solidFluidFile, encodedSolidFluid);
         write(captureDirectory, frontToBackFile, frontToBack);
         write(captureDirectory, rankedFile, ranked);
@@ -217,6 +250,10 @@ public final class TranslucentProbeCapture {
         write(captureDirectory, countFile, acceptedFragmentCount);
         write(captureDirectory, overflowFile, overflow);
         writeVisualization(captureDirectory.resolve(baseVisualizationFile), baseClassIds);
+        writeGrayscaleVisualization(
+            captureDirectory.resolve(fogRetentionVisualizationFile),
+            baseFogRetention
+        );
         writeVisualization(
             captureDirectory.resolve(nearestVisualizationFile),
             storedLayers.get(0).copyClassIds()
@@ -230,6 +267,15 @@ public final class TranslucentProbeCapture {
         artifacts.put(
             "baseDepth",
             artifact(baseDepthFile, TranslucentProbeBufferEncoding.DEPTH_ENCODING, 4, encodedBaseDepth)
+        );
+        artifacts.put(
+            "baseFogRetention",
+            artifact(
+                baseFogRetentionFile,
+                "uint8 fixed-function fog retention; 0 fully fogged, 255 unfogged",
+                1,
+                baseFogRetention
+            )
         );
         artifacts.put(
             "solidFluidFrontmost",
@@ -274,9 +320,11 @@ public final class TranslucentProbeCapture {
             graphicsMode,
             cameraMedium,
             resourcePacks,
+            fogContext,
             vocabulary,
             artifacts,
             baseVisualizationFile,
+            fogRetentionVisualizationFile,
             nearestVisualizationFile,
             candidates.getOverflowPixelCount(),
             saturatedFragmentCountPixels,
@@ -378,6 +426,41 @@ public final class TranslucentProbeCapture {
         }
     }
 
+    private static byte[] readFogRetention(Framebuffer framebuffer, int[] baseClassIds) {
+        if (baseClassIds.length != Math.multiplyExact(WIDTH, HEIGHT)) {
+            throw new IllegalArgumentException("Base class buffer dimensions do not match");
+        }
+        try (NativeImage image = readColor(framebuffer)) {
+            byte[] values = new byte[baseClassIds.length];
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int pixel = y * WIDTH + x;
+                    int encoded = image.getPixelColor(x, y);
+                    int red = NativeImage.getRed(encoded);
+                    int green = NativeImage.getGreen(encoded);
+                    int blue = NativeImage.getBlue(encoded);
+                    int alpha = NativeImage.getAlpha(encoded);
+                    boolean basePresent = baseClassIds[pixel]
+                        != BlockClassManifest.BACKGROUND_CLASS_ID;
+                    if (red != green || red != blue) {
+                        throw new IllegalStateException(
+                            "Fog retention framebuffer modified its grayscale channels"
+                        );
+                    }
+                    if (basePresent && alpha < SemanticClassEncoding.MIN_VISIBLE_CUTOUT_ALPHA) {
+                        throw new IllegalStateException(
+                            "Fog retention coverage does not match the winning base fragment"
+                        );
+                    }
+                    // Background-only geometry still participates in the replay depth test,
+                    // but it must not become a retained base value in the saved diagnostic.
+                    values[pixel] = basePresent ? (byte)red : 0;
+                }
+            }
+            return values;
+        }
+    }
+
     private static NativeImage readColor(Framebuffer framebuffer) {
         framebuffer.beginRead();
         try {
@@ -468,6 +551,23 @@ public final class TranslucentProbeCapture {
                         x,
                         y,
                         toAbgr(SemanticClassEncoding.falseColorRgb(classId))
+                    );
+                }
+            }
+            visualization.writeFile(path);
+        }
+    }
+
+    private static void writeGrayscaleVisualization(Path path, byte[] values) throws IOException {
+        TranslucentProbeBufferEncoding.requireU8(WIDTH, HEIGHT, values);
+        try (NativeImage visualization = new NativeImage(WIDTH, HEIGHT, false)) {
+            for (int y = 0; y < HEIGHT; y++) {
+                for (int x = 0; x < WIDTH; x++) {
+                    int value = Byte.toUnsignedInt(values[y * WIDTH + x]);
+                    visualization.setPixelColor(
+                        x,
+                        y,
+                        0xFF000000 | value << 16 | value << 8 | value
                     );
                 }
             }
