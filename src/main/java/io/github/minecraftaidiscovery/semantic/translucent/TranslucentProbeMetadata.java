@@ -1,6 +1,7 @@
 package io.github.minecraftaidiscovery.semantic.translucent;
 
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureMetadata;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
 import java.util.Collection;
@@ -10,8 +11,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public final class TranslucentProbeMetadata {
-    public static final int FORMAT_VERSION = 2;
-    public static final String FORMAT_NAME = "translucent-observation-probe-v2";
+    public static final int FORMAT_VERSION = 3;
+    public static final String FORMAT_NAME = "translucent-observation-probe-v3";
 
     private TranslucentProbeMetadata() {
     }
@@ -23,11 +24,15 @@ public final class TranslucentProbeMetadata {
         String cameraMedium,
         Collection<String> resourcePacks,
         FogRetentionCaptureContext fogContext,
+        LightingRetentionCaptureContext lightingContext,
         BlockClassVocabulary vocabulary,
         Map<String, Artifact> artifacts,
         String baseVisualization,
+        String lightingRetentionVisualization,
         String fogRetentionVisualization,
         String nearestVisualization,
+        long validLightingBasePixelCount,
+        long unsupportedLightingBasePixelCount,
         long overflowPixelCount,
         long saturatedFragmentCountPixels,
         Map<Integer, Long> observedClassCounts
@@ -41,12 +46,22 @@ public final class TranslucentProbeMetadata {
         if (resourcePacks == null || resourcePacks.isEmpty()) {
             throw new IllegalArgumentException("Active resource packs are missing");
         }
-        if (fogContext == null || vocabulary == null || artifacts == null || artifacts.isEmpty()) {
+        if (fogContext == null
+            || lightingContext == null
+            || vocabulary == null
+            || artifacts == null
+            || artifacts.isEmpty()) {
             throw new IllegalArgumentException("Translucent probe metadata input is missing");
         }
         requireFileName(baseVisualization);
+        requireFileName(lightingRetentionVisualization);
         requireFileName(fogRetentionVisualization);
         requireFileName(nearestVisualization);
+        requirePixelCount("valid lighting base", validLightingBasePixelCount, pixels);
+        requirePixelCount("unsupported lighting base", unsupportedLightingBasePixelCount, pixels);
+        if (validLightingBasePixelCount + unsupportedLightingBasePixelCount > pixels) {
+            throw new IllegalArgumentException("Lighting base pixel counts exceed the image");
+        }
         requirePixelCount("overflow", overflowPixelCount, pixels);
         requirePixelCount("fragment-count saturation", saturatedFragmentCountPixels, pixels);
 
@@ -97,6 +112,12 @@ public final class TranslucentProbeMetadata {
         appendStringArray(json, "resourcePacks", resourcePacks);
         json.append("  \"manifest\": {\"entryCount\": ").append(vocabulary.getEntryCount())
             .append(", \"sha256\": \"").append(vocabulary.getFingerprintSha256()).append("\"},\n");
+        appendLightingRetention(
+            json,
+            lightingContext,
+            validLightingBasePixelCount,
+            unsupportedLightingBasePixelCount
+        );
         appendFogRetention(json, fogContext);
         json.append("  \"renderEvidence\": {\n");
         json.append("    \"baseLayers\": [\"solid\", \"cutout_mipped\", \"cutout\"],\n");
@@ -118,6 +139,7 @@ public final class TranslucentProbeMetadata {
         json.append("    \"sampledAlpha\": \"uint8 block-atlas sample, researcher-only\",\n");
         json.append("    \"accumulatedOpacity\": \"uint8 source-over alpha, researcher-only\",\n");
         json.append("    \"acceptedFragmentCount\": \"uint8 saturated at 255, researcher-only\",\n");
+        json.append("    \"baseLightingRetention\": \"uint8 RGB renderer-lighting response, researcher-only\",\n");
         json.append("    \"baseFogRetention\": \"uint8 fixed-function factor, researcher-only\",\n");
         json.append("    \"saturatedFragmentCountPixels\": ").append(saturatedFragmentCountPixels)
             .append(",\n");
@@ -147,7 +169,9 @@ public final class TranslucentProbeMetadata {
         }
         json.append("  },\n");
         json.append("  \"visualizations\": {\"base\": \"")
-            .append(escape(baseVisualization)).append("\", \"baseFogRetention\": \"")
+            .append(escape(baseVisualization)).append("\", \"baseLightingRetention\": \"")
+            .append(escape(lightingRetentionVisualization))
+            .append("\", \"baseFogRetention\": \"")
             .append(escape(fogRetentionVisualization))
             .append("\", \"frontmostTranslucent\": \"")
             .append(escape(nearestVisualization)).append("\", \"colors\": ")
@@ -220,6 +244,67 @@ public final class TranslucentProbeMetadata {
             json.append(projection[index]);
         }
         json.append("]\n");
+        json.append("  },\n");
+    }
+
+    private static void appendLightingRetention(
+        StringBuilder json,
+        LightingRetentionCaptureContext context,
+        long validBasePixelCount,
+        long unsupportedBasePixelCount
+    ) {
+        json.append("  \"baseLightingRetention\": {\n");
+        appendString(
+            json,
+            "status",
+            unsupportedBasePixelCount == 0 ? "valid" : "partial",
+            true,
+            4
+        );
+        json.append("    \"coverage\": \"winning positive block-model fragment in solid, cutout_mipped, or cutout\",\n");
+        json.append("    \"method\": \"Minecraft active lightmap sampled at renderer-emitted coordinates and multiplied by the renderer AO/directional value\",\n");
+        json.append("    \"excludedColorTerms\": [\"block atlas RGB\", \"baked quad color\", \"biome tint\"],\n");
+        json.append("    \"separateFromFog\": true,\n");
+        json.append("    \"thresholdApplied\": false,\n");
+        json.append("    \"agentVisible\": false,\n");
+        json.append("    \"quantization\": \"renderer multiplier uint8 sidecar and normalized RGB8 framebuffer readback\",\n");
+        json.append("    \"validity\": \"255 for a supported positive block-model base fragment; 0 means background or unsupported source, not a measured dark value\",\n");
+        json.append("    \"validBasePixelCount\": ").append(validBasePixelCount).append(",\n");
+        json.append("    \"unsupportedBasePixelCount\": ")
+            .append(unsupportedBasePixelCount).append(",\n");
+        json.append("    \"unsupportedPixelSources\": [\"fluid renderer\", \"base geometry not emitted through BlockModelRenderer.renderQuad\"],\n");
+        json.append("    \"unsupportedStatePolicy\": \"capture fails instead of substituting a distance or world-light approximation\",\n");
+        json.append("    \"unsupportedStates\": [\"fabulous graphics\", \"non-vanilla resource packs\", \"active post shader\", \"missing or mismatched renderer lighting sidecar\", \"inactive or nonstandard lightmap texture state\"],\n");
+        json.append("    \"tickDelta\": ").append(context.getTickDelta()).append(",\n");
+        json.append("    \"gamma\": ").append(context.getGamma()).append(",\n");
+        json.append("    \"ordinaryGammaRange\": ")
+            .append(context.isOrdinaryGammaRange()).append(",\n");
+        json.append("    \"ambientOcclusionEnabled\": ")
+            .append(context.isAmbientOcclusionEnabled()).append(",\n");
+        appendString(json, "world", context.getWorld(), true, 4);
+        appendString(json, "dimensionType", context.getDimensionType(), true, 4);
+        json.append("    \"dimensionLighting\": {\"hasSkyLight\": ")
+            .append(context.hasSkyLight()).append(", \"hasFixedTime\": ")
+            .append(context.hasFixedTime()).append(", \"darkenedDirectionalLighting\": ")
+            .append(context.hasDarkenedDirectionalLighting())
+            .append(", \"endLightmapTransform\": ")
+            .append(context.hasEndLightmapTransform()).append("},\n");
+        json.append("    \"worldTime\": ").append(context.getWorldTime()).append(",\n");
+        json.append("    \"timeOfDay\": ").append(context.getTimeOfDay()).append(",\n");
+        json.append("    \"rainGradient\": ").append(context.getRainGradient()).append(",\n");
+        json.append("    \"thunderGradient\": ").append(context.getThunderGradient()).append(",\n");
+        json.append("    \"lightningTicksLeft\": ")
+            .append(context.getLightningTicksLeft()).append(",\n");
+        json.append("    \"bossSkyDarkness\": ")
+            .append(context.getSkyDarkness()).append(",\n");
+        json.append("    \"underwaterVisibility\": ")
+            .append(context.getUnderwaterVisibility()).append(",\n");
+        json.append("    \"statusEffects\": {\"nightVision\": ")
+            .append(context.hasNightVision()).append(", \"nightVisionDurationTicks\": ")
+            .append(context.getNightVisionDurationTicks()).append(", \"nightVisionStrength\": ")
+            .append(context.getNightVisionStrength()).append(", \"conduitPower\": ")
+            .append(context.hasConduitPower()).append(", \"conduitPowerDurationTicks\": ")
+            .append(context.getConduitPowerDurationTicks()).append("}\n");
         json.append("  },\n");
     }
 

@@ -3,6 +3,7 @@ package io.github.minecraftaidiscovery.semantic.mixin;
 import io.github.minecraftaidiscovery.semantic.SemanticCapture;
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureRequests;
 import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCaptureRequests;
@@ -60,6 +61,7 @@ abstract class WorldRendererMixin {
                 matrices,
                 camera,
                 gameRenderer,
+                tickDelta,
                 projectionMatrix
             );
             return;
@@ -89,6 +91,7 @@ abstract class WorldRendererMixin {
             matrices,
             camera,
             gameRenderer,
+            tickDelta,
             projectionMatrix
         );
     }
@@ -97,6 +100,7 @@ abstract class WorldRendererMixin {
         MatrixStack matrices,
         Camera camera,
         GameRenderer gameRenderer,
+        float tickDelta,
         Matrix4f projectionMatrix
     ) {
         if (!TranslucentProbeCaptureRequests.consume()) {
@@ -113,10 +117,13 @@ abstract class WorldRendererMixin {
                 gameRenderer,
                 projectionMatrix
             );
+            LightingRetentionCaptureContext lightingContext =
+                LightingRetentionCaptureContext.capture(client, gameRenderer, tickDelta);
             Path metadataPath = TranslucentProbeCapture.capture(
                 client,
                 cameraMedium,
                 fogContext,
+                lightingContext,
                 layer -> renderLayer(
                     layer,
                     matrices,

@@ -4,6 +4,7 @@
   "package": "io.github.minecraftaidiscovery.semantic.mixin",
   "compatibilityLevel": "JAVA_8",
   "client": [
+    "BlockModelRendererMixin",
     "BufferBuilderMixin",
     "BufferBuilderStateMixin",
     "ChunkRebuildTaskMixin",

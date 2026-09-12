@@ -7,6 +7,10 @@ import io.github.minecraftaidiscovery.semantic.SemanticGpuTransport;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderPass;
 import io.github.minecraftaidiscovery.semantic.SemanticVertexData;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntime;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionBufferBuilderExtension;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionGpuTransport;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionRenderPass;
+import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionVertexData;
 import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionGpuTransport;
 import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionRenderPass;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeBufferBuilderExtension;
@@ -71,6 +75,18 @@ abstract class VertexBufferMixin {
     @Unique
     private String semanticObservation$translucentProbeManifestFingerprint;
 
+    @Unique
+    private int semanticObservation$lightingRetentionBufferId = -1;
+
+    @Unique
+    private byte[] semanticObservation$pendingLightingRetentionVertexData;
+
+    @Unique
+    private boolean semanticObservation$lightingRetentionPresent;
+
+    @Unique
+    private boolean semanticObservation$lightingRetentionInvalidOnly;
+
     @Redirect(
         method = "uploadInternal",
         at = @At(
@@ -87,6 +103,11 @@ abstract class VertexBufferMixin {
         semanticObservation$pendingTranslucentProbeVertexData =
             ((TranslucentProbeBufferBuilderExtension)builder)
                 .semanticObservation$takeTranslucentProbeVertexData(data.getFirst().getCount());
+        semanticObservation$pendingLightingRetentionVertexData =
+            TranslucentProbeConfiguration.isEnabled()
+                ? ((LightingRetentionBufferBuilderExtension)builder)
+                    .semanticObservation$takeLightingRetentionVertexData(data.getFirst().getCount())
+                : null;
         return data;
     }
 
@@ -96,6 +117,8 @@ abstract class VertexBufferMixin {
         semanticObservation$pendingVertexData = null;
         byte[] translucentProbeVertexData = semanticObservation$pendingTranslucentProbeVertexData;
         semanticObservation$pendingTranslucentProbeVertexData = null;
+        byte[] lightingRetentionVertexData = semanticObservation$pendingLightingRetentionVertexData;
+        semanticObservation$pendingLightingRetentionVertexData = null;
         if (!format.equals(VertexFormats.POSITION_COLOR_TEXTURE_LIGHT_NORMAL)) {
             return;
         }
@@ -147,9 +170,40 @@ abstract class VertexBufferMixin {
             semanticObservation$translucentProbePresent = true;
             semanticObservation$translucentProbeManifestFingerprint =
                 semanticObservation$manifestFingerprint;
+
+            if (lightingRetentionVertexData == null
+                || lightingRetentionVertexData.length
+                    != vertexCount * LightingRetentionVertexData.BYTES_PER_VERTEX) {
+                throw new IllegalStateException(
+                    "Lighting-retention sidecar does not match the uploaded vertex buffer"
+                );
+            }
+            LightingRetentionVertexData.requireCompatibleVertexCount(
+                lightingRetentionVertexData,
+                vertexCount
+            );
+            semanticObservation$lightingRetentionInvalidOnly =
+                LightingRetentionVertexData.isInvalidOnly(lightingRetentionVertexData);
+            if (!semanticObservation$lightingRetentionInvalidOnly) {
+                if (semanticObservation$lightingRetentionBufferId < 0) {
+                    RenderSystem.glGenBuffers(id -> semanticObservation$lightingRetentionBufferId = id);
+                }
+                ByteBuffer directLightingData = ByteBuffer.allocateDirect(
+                    lightingRetentionVertexData.length
+                );
+                directLightingData.put(lightingRetentionVertexData).flip();
+                RenderSystem.glBindBuffer(
+                    ARRAY_BUFFER,
+                    () -> semanticObservation$lightingRetentionBufferId
+                );
+                RenderSystem.glBufferData(ARRAY_BUFFER, directLightingData, STATIC_DRAW);
+                VertexBuffer.unbind();
+            }
+            semanticObservation$lightingRetentionPresent = true;
         } else {
             semanticObservation$translucentProbePresent = false;
             semanticObservation$translucentProbeManifestFingerprint = null;
+            semanticObservation$lightingRetentionPresent = false;
         }
     }
 
@@ -162,6 +216,11 @@ abstract class VertexBufferMixin {
                 matrix,
                 mode
             );
+            callback.cancel();
+            return;
+        }
+        if (LightingRetentionRenderPass.isActive()) {
+            semanticObservation$drawLightingRetention(matrix, mode);
             callback.cancel();
             return;
         }
@@ -216,6 +275,27 @@ abstract class VertexBufferMixin {
         );
     }
 
+    @Unique
+    private void semanticObservation$drawLightingRetention(Matrix4f matrix, int mode) {
+        if (!TranslucentProbeConfiguration.isEnabled()
+            || !semanticObservation$lightingRetentionPresent) {
+            throw new IllegalStateException("Vertex buffer has no enabled lighting-retention data");
+        }
+        if (semanticObservation$vertexCount != vertexCount) {
+            throw new IllegalStateException(
+                "Lighting-retention vertex buffer has a mismatched vertex count"
+            );
+        }
+        LightingRetentionGpuTransport.draw(
+            LightingRetentionRenderPass.requireContext(),
+            semanticObservation$lightingRetentionBufferId,
+            semanticObservation$lightingRetentionInvalidOnly,
+            vertexCount,
+            matrix,
+            mode
+        );
+    }
+
     @Inject(method = "close", at = @At("HEAD"))
     private void semanticObservation$deleteSidecar(CallbackInfo callback) {
         if (semanticObservation$bufferId >= 0) {
@@ -225,6 +305,10 @@ abstract class VertexBufferMixin {
         if (semanticObservation$translucentProbeBufferId >= 0) {
             RenderSystem.glDeleteBuffers(semanticObservation$translucentProbeBufferId);
             semanticObservation$translucentProbeBufferId = -1;
+        }
+        if (semanticObservation$lightingRetentionBufferId >= 0) {
+            RenderSystem.glDeleteBuffers(semanticObservation$lightingRetentionBufferId);
+            semanticObservation$lightingRetentionBufferId = -1;
         }
     }
 }
