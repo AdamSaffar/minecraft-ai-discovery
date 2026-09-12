@@ -4,6 +4,7 @@ import io.github.minecraftaidiscovery.semantic.SemanticCapture;
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureRequests;
 import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionCapture;
 import io.github.minecraftaidiscovery.semantic.translucent.FogRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCaptureRequests;
@@ -119,7 +120,7 @@ abstract class WorldRendererMixin {
             );
             LightingRetentionCaptureContext lightingContext =
                 LightingRetentionCaptureContext.capture(client, gameRenderer, tickDelta);
-            Path metadataPath = TranslucentProbeCapture.capture(
+            TranslucentProbeCapture.PreparedCapture prepared = TranslucentProbeCapture.prepare(
                 client,
                 cameraMedium,
                 fogContext,
@@ -132,14 +133,8 @@ abstract class WorldRendererMixin {
                     cameraPosition.z
                 )
             );
-            String relativePath = client.runDirectory.toPath().relativize(metadataPath).toString();
-            SEMANTIC_OBSERVATION_LOGGER.info(
-                "Wrote researcher-only translucent probe metadata to {}",
-                metadataPath.toAbsolutePath()
-            );
-            client.inGameHud.getChatHud().addMessage(
-                new LiteralText("Translucent probe saved: " + relativePath)
-            );
+            // Camera overlays run later in this same GameRenderer frame.
+            CameraOverlayRetentionCapture.schedule(prepared);
         } catch (Exception exception) {
             SEMANTIC_OBSERVATION_LOGGER.error("Researcher translucent probe failed", exception);
             client.inGameHud.getChatHud().addMessage(

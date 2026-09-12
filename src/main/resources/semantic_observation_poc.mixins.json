@@ -5,9 +5,12 @@
   "compatibilityLevel": "JAVA_8",
   "client": [
     "BlockModelRendererMixin",
+    "BufferRendererMixin",
     "BufferBuilderMixin",
     "BufferBuilderStateMixin",
     "ChunkRebuildTaskMixin",
+    "GameRendererMixin",
+    "InGameOverlayRendererMixin",
     "KeyboardMixin",
     "VertexBufferMixin",
     "WorldRendererMixin"
