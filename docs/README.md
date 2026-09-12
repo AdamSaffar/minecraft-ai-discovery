@@ -11,3 +11,4 @@ The project is currently in its initial proof-of-concept stage. Additional docum
 - [Cutout-block semantic classes](experiments/cutout-block-semantic-classes.md) — verified texture-shaped semantic coverage across solid, cutout-mipped, and cutout block-model layers.
 - [Translucent observation diagnostic probe](experiments/translucent-observation-probe.md) — verified an opt-in researcher diagnostic for overlapping translucent contributions and GPU-applied base fog retention.
 - [Lighting-retention diagnostic probe](experiments/lighting-retention-probe.md) — verified an opt-in, renderer-derived researcher measurement of lighting on aligned opaque/cutout base geometry.
+- [Camera-overlay retention diagnostic probe](experiments/camera-overlay-retention-probe.md) — verified an opt-in, renderer-derived researcher measurement for the inside-block, underwater, and fire camera-overlay paths.
