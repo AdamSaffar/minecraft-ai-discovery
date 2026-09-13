@@ -1,6 +1,8 @@
 package io.github.minecraftaidiscovery.semantic.translucent;
 
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureMetadata;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageEncoding;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
@@ -13,8 +15,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public final class TranslucentProbeMetadata {
-    public static final int FORMAT_VERSION = 4;
-    public static final String FORMAT_NAME = "translucent-observation-probe-v4";
+    public static final int FORMAT_VERSION = 5;
+    public static final String FORMAT_NAME = "translucent-observation-probe-v5";
 
     private TranslucentProbeMetadata() {
     }
@@ -33,13 +35,17 @@ public final class TranslucentProbeMetadata {
         String lightingRetentionVisualization,
         String fogRetentionVisualization,
         String cameraOverlayRetentionVisualization,
+        String firstPersonDepthCoverageVisualization,
         String nearestVisualization,
         long validLightingBasePixelCount,
         long unsupportedLightingBasePixelCount,
-        long validCameraOverlayBasePixelCount,
+        long positiveBasePixelCount,
+        long fullScreenFirstPersonCoveredPixelCount,
+        long coveredBasePixelCount,
         long overflowPixelCount,
         long saturatedFragmentCountPixels,
         CameraOverlayRetentionResult cameraOverlayRetention,
+        FirstPersonDepthCoverageResult firstPersonDepthCoverage,
         Map<Integer, Long> observedClassCounts
     ) {
         int pixels = TranslucentProbeBufferEncoding.requireDimensions(width, height);
@@ -54,6 +60,7 @@ public final class TranslucentProbeMetadata {
         if (fogContext == null
             || lightingContext == null
             || cameraOverlayRetention == null
+            || firstPersonDepthCoverage == null
             || vocabulary == null
             || artifacts == null
             || artifacts.isEmpty()) {
@@ -63,6 +70,7 @@ public final class TranslucentProbeMetadata {
         requireFileName(lightingRetentionVisualization);
         requireFileName(fogRetentionVisualization);
         requireFileName(cameraOverlayRetentionVisualization);
+        requireFileName(firstPersonDepthCoverageVisualization);
         requireFileName(nearestVisualization);
         requirePixelCount("valid lighting base", validLightingBasePixelCount, pixels);
         requirePixelCount("unsupported lighting base", unsupportedLightingBasePixelCount, pixels);
@@ -71,13 +79,45 @@ public final class TranslucentProbeMetadata {
         }
         requirePixelCount(
             "valid camera-overlay base",
-            validCameraOverlayBasePixelCount,
+            positiveBasePixelCount,
             pixels
         );
         if (cameraOverlayRetention.getWidth() != width
             || cameraOverlayRetention.getHeight() != height) {
             throw new IllegalArgumentException(
                 "Camera-overlay retention dimensions do not match the metadata"
+            );
+        }
+        if (firstPersonDepthCoverage.getWidth() != width
+            || firstPersonDepthCoverage.getHeight() != height) {
+            throw new IllegalArgumentException(
+                "First-person depth-coverage dimensions do not match the metadata"
+            );
+        }
+        if (firstPersonDepthCoverage.wasPostHandDepthSampled()
+            != cameraOverlayRetention.wasOverlayStageEntered()) {
+            throw new IllegalArgumentException(
+                "First-person depth sampling does not match the overlay-stage lifecycle"
+            );
+        }
+        requirePixelCount(
+            "full-screen first-person coverage",
+            fullScreenFirstPersonCoveredPixelCount,
+            pixels
+        );
+        requirePixelCount("covered first-person base", coveredBasePixelCount, pixels);
+        if (fullScreenFirstPersonCoveredPixelCount
+            != FirstPersonDepthCoverageEncoding.countCovered(
+                firstPersonDepthCoverage.copyFullScreenCoverage()
+            )) {
+            throw new IllegalArgumentException(
+                "First-person full-screen coverage count does not match its buffer"
+            );
+        }
+        if (coveredBasePixelCount > fullScreenFirstPersonCoveredPixelCount
+            || coveredBasePixelCount > positiveBasePixelCount) {
+            throw new IllegalArgumentException(
+                "First-person covered base count exceeds its source coverage"
             );
         }
         requirePixelCount("overflow", overflowPixelCount, pixels);
@@ -140,7 +180,16 @@ public final class TranslucentProbeMetadata {
             json,
             fogContext.getPerspective(),
             cameraOverlayRetention,
-            validCameraOverlayBasePixelCount,
+            positiveBasePixelCount,
+            pixels
+        );
+        appendFirstPersonDepthCoverage(
+            json,
+            fogContext.getPerspective(),
+            firstPersonDepthCoverage,
+            fullScreenFirstPersonCoveredPixelCount,
+            coveredBasePixelCount,
+            positiveBasePixelCount,
             pixels
         );
         appendFogRetention(json, fogContext);
@@ -167,6 +216,7 @@ public final class TranslucentProbeMetadata {
         json.append("    \"baseLightingRetention\": \"uint8 RGB renderer-lighting response, researcher-only\",\n");
         json.append("    \"baseFogRetention\": \"uint8 fixed-function factor, researcher-only\",\n");
         json.append("    \"baseCameraOverlayRetention\": \"uint8 retained pre-overlay RGB fraction, researcher-only\",\n");
+        json.append("    \"baseFirstPersonDepthCoverage\": \"uint8 binary post-hand depth write, researcher-only\",\n");
         json.append("    \"saturatedFragmentCountPixels\": ").append(saturatedFragmentCountPixels)
             .append(",\n");
         json.append("    \"zeroAlphaPolicy\": \"discarded and explicitly excluded from vanilla zero-alpha depth-write equivalence\"\n");
@@ -201,6 +251,8 @@ public final class TranslucentProbeMetadata {
             .append(escape(fogRetentionVisualization))
             .append("\", \"baseCameraOverlayRetention\": \"")
             .append(escape(cameraOverlayRetentionVisualization))
+            .append("\", \"baseFirstPersonDepthCoverage\": \"")
+            .append(escape(firstPersonDepthCoverageVisualization))
             .append("\", \"frontmostTranslucent\": \"")
             .append(escape(nearestVisualization)).append("\", \"colors\": ")
             .append("\"deterministic class-id hash; diagnostic only\"},\n");
@@ -375,6 +427,53 @@ public final class TranslucentProbeMetadata {
         json.append("    \"resourcePackPolicy\": \"vanilla only\",\n");
         json.append("    \"postShaderPolicy\": \"none loaded\",\n");
         json.append("    \"unsupportedStates\": [\"fabulous graphics\", \"non-vanilla resource packs\", \"active post shader\", \"unexpected overlay draw format or count\", \"unexpected fixed-function render state\"]\n");
+        json.append("  },\n");
+    }
+
+    private static void appendFirstPersonDepthCoverage(
+        StringBuilder json,
+        String perspective,
+        FirstPersonDepthCoverageResult result,
+        long fullScreenCoveredPixelCount,
+        long coveredBasePixelCount,
+        long positiveBasePixelCount,
+        int pixels
+    ) {
+        json.append("  \"baseFirstPersonDepthCoverage\": {\n");
+        appendString(json, "status", "valid", true, 4);
+        json.append("    \"coverage\": \"winning positive solid, cutout_mipped, or cutout base pixels\",\n");
+        json.append("    \"method\": \"nearest-scaled main-framebuffer depth sampled after the first-person hand/item flush and before camera overlays\",\n");
+        json.append("    \"postHandDepthSampled\": ")
+            .append(result.wasPostHandDepthSampled()).append(",\n");
+        appendString(json, "perspective", perspective, true, 4);
+        json.append("    \"clearDepth\": ")
+            .append(FirstPersonDepthCoverageEncoding.CLEAR_DEPTH).append(",\n");
+        json.append("    \"values\": {\"clear\": 0, \"depthWritten\": 255},\n");
+        json.append("    \"pixelOrder\": \"top-to-bottom rows, left-to-right pixels\",\n");
+        json.append("    \"fullScreenCoveredPixelCount\": ")
+            .append(fullScreenCoveredPixelCount).append(",\n");
+        json.append("    \"coveredBasePixelCount\": ")
+            .append(coveredBasePixelCount).append(",\n");
+        json.append("    \"positiveBasePixelCount\": ")
+            .append(positiveBasePixelCount).append(",\n");
+        json.append("    \"backgroundPixelCount\": ")
+            .append(pixels - positiveBasePixelCount).append(",\n");
+        json.append("    \"validity\": \"serialized only on positive base pixels; zero on background and when the first-person stage is absent\",\n");
+        json.append("    \"nearestScaledFromWindowFramebuffer\": true,\n");
+        json.append("    \"independent640RasterizationClaim\": false,\n");
+        json.append("    \"binaryClearDepthTestOnly\": true,\n");
+        json.append("    \"visibilityThresholdApplied\": false,\n");
+        json.append("    \"agentVisible\": false,\n");
+        json.append("    \"perceptualVisibilityScore\": false,\n");
+        json.append("    \"opacityOrRetentionMeasurement\": false,\n");
+        json.append("    \"rawDepthSerialized\": false,\n");
+        json.append("    \"handOrItemIdentitySerialized\": false,\n");
+        json.append("    \"rendererReplay\": false,\n");
+        json.append("    \"additionalPlayerOrWorldQueries\": false,\n");
+        json.append("    \"knownLimitations\": [\"translucent fragments can write depth without fully replacing RGB\", \"color-only glint and decorative layers are not independently represented\"],\n");
+        json.append("    \"resourcePackPolicy\": \"vanilla only\",\n");
+        json.append("    \"postShaderPolicy\": \"none loaded\",\n");
+        json.append("    \"unsupportedStates\": [\"fabulous graphics\", \"non-vanilla resource packs\", \"active post shader\", \"missing or mismatched depth attachment\", \"non-1.0 depth clear\", \"invalid depth readback\"]\n");
         json.append("  },\n");
     }
 

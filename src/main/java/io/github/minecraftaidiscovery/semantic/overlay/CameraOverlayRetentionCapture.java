@@ -1,5 +1,6 @@
 package io.github.minecraftaidiscovery.semantic.overlay;
 
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -111,13 +112,19 @@ public final class CameraOverlayRetentionCapture {
         }
 
         Map<CameraOverlayKind, Integer> drawCounts = state.tracker.finish();
+        FirstPersonDepthCoverageResult firstPersonDepthCoverage = state.gpu == null
+            ? FirstPersonDepthCoverageResult.noFirstPersonStage(
+                TranslucentProbeCapture.WIDTH,
+                TranslucentProbeCapture.HEIGHT
+            )
+            : state.gpu.getFirstPersonDepthCoverage();
         CameraOverlayRetentionResult result = state.gpu == null
             ? CameraOverlayRetentionResult.noOverlayStage(
                 TranslucentProbeCapture.WIDTH,
                 TranslucentProbeCapture.HEIGHT
             )
             : state.gpu.finish(state.tracker.wasOverlayStageEntered(), drawCounts);
-        return state.capture.complete(result);
+        return state.capture.complete(result, firstPersonDepthCoverage);
     }
 
     static boolean hasPendingForTesting() {

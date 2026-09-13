@@ -1,5 +1,6 @@
 package io.github.minecraftaidiscovery.semantic.overlay;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -7,6 +8,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Test;
 
 public class CameraOverlayRetentionGpuTransportTest {
+    @Test
+    public void acceptsOnlyTheMinecraftDepthClearSentinel() {
+        assertTrue(CameraOverlayRetentionGpuTransport.isSupportedClearDepth(1.0D));
+        assertFalse(
+            CameraOverlayRetentionGpuTransport.isSupportedClearDepth(
+                Math.nextDown(1.0D)
+            )
+        );
+        assertFalse(CameraOverlayRetentionGpuTransport.isSupportedClearDepth(Double.NaN));
+    }
+
     @Test
     public void restoresStateAfterSuccessfulMirrorWork() {
         AtomicBoolean restored = new AtomicBoolean();

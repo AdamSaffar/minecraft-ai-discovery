@@ -4,6 +4,8 @@ import io.github.minecraftaidiscovery.semantic.SemanticClassEncoding;
 import io.github.minecraftaidiscovery.semantic.SemanticMinecraftRenderLayers;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderLayer;
 import io.github.minecraftaidiscovery.semantic.SemanticRenderPass;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageEncoding;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionBufferEncoding;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionRenderPass;
@@ -234,7 +236,8 @@ public final class TranslucentProbeCapture {
         TranslucentProbeCandidates candidates,
         byte[] accumulatedOpacity,
         byte[] acceptedFragmentCount,
-        CameraOverlayRetentionResult cameraOverlayRetention
+        CameraOverlayRetentionResult cameraOverlayRetention,
+        FirstPersonDepthCoverageResult firstPersonDepthCoverage
     ) throws IOException {
         Files.createDirectories(captureDirectory);
         byte[] baseClasses = SemanticClassEncoding.encodeU16Le(WIDTH, HEIGHT, baseClassIds);
@@ -279,6 +282,13 @@ public final class TranslucentProbeCapture {
                 "Camera-overlay retention dimensions do not match the F9 capture"
             );
         }
+        if (firstPersonDepthCoverage == null
+            || firstPersonDepthCoverage.getWidth() != WIDTH
+            || firstPersonDepthCoverage.getHeight() != HEIGHT) {
+            throw new IllegalArgumentException(
+                "First-person depth-coverage dimensions do not match the F9 capture"
+            );
+        }
         byte[] baseCameraOverlayRetention =
             CameraOverlayRetentionBufferEncoding.maskToPositiveBase(
                 WIDTH,
@@ -286,9 +296,23 @@ public final class TranslucentProbeCapture {
                 cameraOverlayRetention.copyFullScreenRetention(),
                 baseClassIds
             );
-        long validCameraOverlayBasePixelCount = Arrays.stream(baseClassIds)
+        byte[] baseFirstPersonDepthCoverage =
+            FirstPersonDepthCoverageEncoding.maskToPositiveBase(
+                WIDTH,
+                HEIGHT,
+                firstPersonDepthCoverage.copyFullScreenCoverage(),
+                baseClassIds
+            );
+        long positiveBasePixelCount = Arrays.stream(baseClassIds)
             .filter(classId -> classId != BlockClassManifest.BACKGROUND_CLASS_ID)
             .count();
+        long fullScreenFirstPersonCoveredPixelCount =
+            FirstPersonDepthCoverageEncoding.countCovered(
+                firstPersonDepthCoverage.copyFullScreenCoverage()
+            );
+        long coveredBasePixelCount = FirstPersonDepthCoverageEncoding.countCovered(
+            baseFirstPersonDepthCoverage
+        );
 
         String baseClassesFile = "base.classes.u16le";
         String baseDepthFile = "base.depth.f32le";
@@ -296,6 +320,7 @@ public final class TranslucentProbeCapture {
         String baseLightingValidityFile = "base.lighting-validity.u8";
         String baseFogRetentionFile = "base.fog-retention.u8";
         String baseCameraOverlayRetentionFile = "base.camera-overlay-retention.u8";
+        String baseFirstPersonDepthCoverageFile = "base.first-person-depth-coverage.u8";
         String solidFluidFile = "solid-fluid.frontmost.bin";
         String frontToBackFile = "translucent.front-to-back.bin";
         String rankedFile = "translucent.contribution-ranked.bin";
@@ -307,6 +332,8 @@ public final class TranslucentProbeCapture {
         String fogRetentionVisualizationFile = "base-fog-retention.png";
         String cameraOverlayRetentionVisualizationFile =
             "base-camera-overlay-retention.png";
+        String firstPersonDepthCoverageVisualizationFile =
+            "base-first-person-depth-coverage.png";
         String nearestVisualizationFile = "translucent-frontmost.png";
 
         write(captureDirectory, baseClassesFile, baseClasses);
@@ -318,6 +345,11 @@ public final class TranslucentProbeCapture {
             captureDirectory,
             baseCameraOverlayRetentionFile,
             baseCameraOverlayRetention
+        );
+        write(
+            captureDirectory,
+            baseFirstPersonDepthCoverageFile,
+            baseFirstPersonDepthCoverage
         );
         write(captureDirectory, solidFluidFile, encodedSolidFluid);
         write(captureDirectory, frontToBackFile, frontToBack);
@@ -337,6 +369,10 @@ public final class TranslucentProbeCapture {
         writeGrayscaleVisualization(
             captureDirectory.resolve(cameraOverlayRetentionVisualizationFile),
             baseCameraOverlayRetention
+        );
+        writeGrayscaleVisualization(
+            captureDirectory.resolve(firstPersonDepthCoverageVisualizationFile),
+            baseFirstPersonDepthCoverage
         );
         writeVisualization(
             captureDirectory.resolve(nearestVisualizationFile),
@@ -386,6 +422,15 @@ public final class TranslucentProbeCapture {
                 CameraOverlayRetentionBufferEncoding.ENCODING,
                 1,
                 baseCameraOverlayRetention
+            )
+        );
+        artifacts.put(
+            "baseFirstPersonDepthCoverage",
+            artifact(
+                baseFirstPersonDepthCoverageFile,
+                FirstPersonDepthCoverageEncoding.ENCODING,
+                1,
+                baseFirstPersonDepthCoverage
             )
         );
         artifacts.put(
@@ -439,13 +484,17 @@ public final class TranslucentProbeCapture {
             lightingRetentionVisualizationFile,
             fogRetentionVisualizationFile,
             cameraOverlayRetentionVisualizationFile,
+            firstPersonDepthCoverageVisualizationFile,
             nearestVisualizationFile,
             validLightingBasePixelCount,
             unsupportedLightingBasePixelCount,
-            validCameraOverlayBasePixelCount,
+            positiveBasePixelCount,
+            fullScreenFirstPersonCoveredPixelCount,
+            coveredBasePixelCount,
             candidates.getOverflowPixelCount(),
             saturatedFragmentCountPixels,
             cameraOverlayRetention,
+            firstPersonDepthCoverage,
             observedClasses(solidFluid, storedLayers)
         );
         Path metadataPath = captureDirectory.resolve("metadata.json");
@@ -861,7 +910,10 @@ public final class TranslucentProbeCapture {
             this.acceptedFragmentCount = acceptedFragmentCount;
         }
 
-        public Path complete(CameraOverlayRetentionResult cameraOverlayRetention)
+        public Path complete(
+            CameraOverlayRetentionResult cameraOverlayRetention,
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage
+        )
             throws IOException {
             if (completed) {
                 throw new IllegalStateException("Prepared F9 capture was already completed");
@@ -887,7 +939,8 @@ public final class TranslucentProbeCapture {
                 candidates,
                 accumulatedOpacity,
                 acceptedFragmentCount,
-                cameraOverlayRetention
+                cameraOverlayRetention,
+                firstPersonDepthCoverage
             );
         }
     }

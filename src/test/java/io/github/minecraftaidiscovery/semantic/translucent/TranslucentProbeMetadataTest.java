@@ -4,6 +4,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import io.github.minecraftaidiscovery.semantic.SemanticCaptureMetadata;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
@@ -54,17 +55,21 @@ public class TranslucentProbeMetadataTest {
             "base-lighting-retention.png",
             "base-fog-retention.png",
             "base-camera-overlay-retention.png",
+            "base-first-person-depth-coverage.png",
             "translucent-frontmost.png",
             12,
             0,
             12,
             3,
+            2,
+            3,
             1,
             overlayResult(),
+            firstPersonResult(),
             observed
         );
 
-        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v4\""));
+        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v5\""));
         assertTrue(json.contains("\"experimental\": true"));
         assertTrue(json.contains("\"researcherOnly\": true"));
         assertTrue(json.contains("\"agentVisible\": false"));
@@ -81,6 +86,15 @@ public class TranslucentProbeMetadataTest {
         assertTrue(json.contains(
             "\"baseCameraOverlayRetention\": \"base-camera-overlay-retention.png\""
         ));
+        assertTrue(json.contains(
+            "\"baseFirstPersonDepthCoverage\": \"base-first-person-depth-coverage.png\""
+        ));
+        assertTrue(json.contains("\"postHandDepthSampled\": true"));
+        assertTrue(json.contains("\"fullScreenCoveredPixelCount\": 3"));
+        assertTrue(json.contains("\"coveredBasePixelCount\": 2"));
+        assertTrue(json.contains("\"opacityOrRetentionMeasurement\": false"));
+        assertTrue(json.contains("\"rawDepthSerialized\": false"));
+        assertTrue(json.contains("\"additionalPlayerOrWorldQueries\": false"));
         assertTrue(json.contains("\"kind\": \"underwater\", \"drawCount\": 1"));
         assertTrue(json.contains("\"additionalWorldQueries\": false"));
         assertTrue(json.contains("\"perceptualVisibilityScore\": false"));
@@ -120,13 +134,17 @@ public class TranslucentProbeMetadataTest {
             "lighting.png",
             "fog.png",
             "overlay.png",
+            "first-person.png",
             "front.png",
             0,
             0,
             0,
             0,
             0,
+            0,
+            0,
             CameraOverlayRetentionResult.noOverlayStage(640, 360),
+            FirstPersonDepthCoverageResult.noFirstPersonStage(640, 360),
             new LinkedHashMap<>()
         );
     }
@@ -165,19 +183,25 @@ public class TranslucentProbeMetadataTest {
             "lighting.png",
             "fog.png",
             "overlay.png",
+            "first-person.png",
             "front.png",
             11,
             1,
             12,
             0,
             0,
+            0,
+            0,
             CameraOverlayRetentionResult.noOverlayStage(640, 360),
+            FirstPersonDepthCoverageResult.noFirstPersonStage(640, 360),
             new LinkedHashMap<>()
         );
 
         assertTrue(json.contains("\"status\": \"partial\""));
         assertTrue(json.contains("\"unsupportedBasePixelCount\": 1"));
         assertTrue(json.contains("not a measured dark value"));
+        assertTrue(json.contains("\"postHandDepthSampled\": false"));
+        assertTrue(json.contains("\"fullScreenCoveredPixelCount\": 0"));
     }
 
     private static CameraOverlayRetentionResult overlayResult() {
@@ -186,6 +210,14 @@ public class TranslucentProbeMetadataTest {
         EnumMap<CameraOverlayKind, Integer> counts = new EnumMap<>(CameraOverlayKind.class);
         counts.put(CameraOverlayKind.UNDERWATER, 1);
         return new CameraOverlayRetentionResult(640, 360, retention, true, counts);
+    }
+
+    private static FirstPersonDepthCoverageResult firstPersonResult() {
+        byte[] coverage = new byte[640 * 360];
+        coverage[0] = (byte)255;
+        coverage[1] = (byte)255;
+        coverage[2] = (byte)255;
+        return new FirstPersonDepthCoverageResult(640, 360, coverage, true);
     }
 
     private static BlockClassVocabulary vocabulary() {
