@@ -2,6 +2,8 @@ package io.github.minecraftaidiscovery.semantic.overlay;
 
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageEncoding;
+import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -45,9 +47,18 @@ public final class CameraOverlayRetentionGpuTransport {
             RenderSystem.colorMask(true, true, true, true);
             RenderSystem.depthMask(true);
             target.clear(MinecraftClient.IS_SYSTEM_MAC);
-            // The main depth contains the hand/item pass at this exact overlay boundary.
+            // World depth was cleared just before the hand pass, so this copy isolates
+            // depth-writing hand/item fragments and preserves the overlays' normal depth tests.
             target.copyDepthFrom(client.getFramebuffer());
-            return new Session(target, client.getFramebuffer().fbo, width, height);
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage =
+                readFirstPersonDepthCoverage(target, width, height);
+            return new Session(
+                target,
+                client.getFramebuffer().fbo,
+                width,
+                height,
+                firstPersonDepthCoverage
+            );
         } catch (RuntimeException exception) {
             if (target != null) {
                 target.delete();
@@ -66,18 +77,66 @@ public final class CameraOverlayRetentionGpuTransport {
         }
     }
 
+    static boolean isSupportedClearDepth(double clearDepth) {
+        return Double.compare(clearDepth, FirstPersonDepthCoverageEncoding.CLEAR_DEPTH) == 0;
+    }
+
+    private static FirstPersonDepthCoverageResult readFirstPersonDepthCoverage(
+        Framebuffer target,
+        int width,
+        int height
+    ) {
+        int pixels = FirstPersonDepthCoverageEncoding.requireDimensions(width, height);
+        FloatBuffer readback = BufferUtils.createFloatBuffer(pixels);
+        GlStateManager.bindFramebuffer(GL30.GL_READ_FRAMEBUFFER, target.fbo);
+        GlStateManager.pixelStore(GL11.GL_PACK_ALIGNMENT, Float.BYTES);
+        GL11.glReadPixels(
+            0,
+            0,
+            width,
+            height,
+            GL11.GL_DEPTH_COMPONENT,
+            GL11.GL_FLOAT,
+            readback
+        );
+        float[] bottomToTopDepth = new float[pixels];
+        readback.get(bottomToTopDepth);
+        return new FirstPersonDepthCoverageResult(
+            width,
+            height,
+            FirstPersonDepthCoverageEncoding.encodeBottomToTopDepth(
+                width,
+                height,
+                bottomToTopDepth
+            ),
+            true
+        );
+    }
+
     public static final class Session {
         private final Framebuffer target;
         private final int mainFramebuffer;
         private final int width;
         private final int height;
+        private final FirstPersonDepthCoverageResult firstPersonDepthCoverage;
         private boolean closed;
 
-        private Session(Framebuffer target, int mainFramebuffer, int width, int height) {
+        private Session(
+            Framebuffer target,
+            int mainFramebuffer,
+            int width,
+            int height,
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage
+        ) {
             this.target = target;
             this.mainFramebuffer = mainFramebuffer;
             this.width = width;
             this.height = height;
+            this.firstPersonDepthCoverage = firstPersonDepthCoverage;
+        }
+
+        public FirstPersonDepthCoverageResult getFirstPersonDepthCoverage() {
+            return firstPersonDepthCoverage;
         }
 
         public void mirror(
@@ -396,6 +455,11 @@ public final class CameraOverlayRetentionGpuTransport {
             if (scissor) {
                 throw new IllegalStateException(
                     "Camera-overlay retention does not support an active scissor test"
+                );
+            }
+            if (!isSupportedClearDepth(clearDepth)) {
+                throw new IllegalStateException(
+                    "First-person depth coverage requires a 1.0 depth clear value"
                 );
             }
         }

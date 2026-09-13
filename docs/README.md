@@ -12,3 +12,4 @@ The project is currently in its initial proof-of-concept stage. Additional docum
 - [Translucent observation diagnostic probe](experiments/translucent-observation-probe.md) — verified an opt-in researcher diagnostic for overlapping translucent contributions and GPU-applied base fog retention.
 - [Lighting-retention diagnostic probe](experiments/lighting-retention-probe.md) — verified an opt-in, renderer-derived researcher measurement of lighting on aligned opaque/cutout base geometry.
 - [Camera-overlay retention diagnostic probe](experiments/camera-overlay-retention-probe.md) — verified an opt-in, renderer-derived researcher measurement for the inside-block, underwater, and fire camera-overlay paths.
+- [First-person depth-coverage diagnostic probe](experiments/first-person-depth-coverage-probe.md) — verified an opt-in, renderer-derived researcher measurement of hand and held-item depth writes over the aligned semantic base.
