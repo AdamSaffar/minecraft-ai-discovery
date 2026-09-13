@@ -4,6 +4,8 @@ import io.github.minecraftaidiscovery.semantic.SemanticCaptureMetadata;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayKind;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -11,8 +13,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public final class TranslucentProbeMetadata {
-    public static final int FORMAT_VERSION = 3;
-    public static final String FORMAT_NAME = "translucent-observation-probe-v3";
+    public static final int FORMAT_VERSION = 4;
+    public static final String FORMAT_NAME = "translucent-observation-probe-v4";
 
     private TranslucentProbeMetadata() {
     }
@@ -30,11 +32,14 @@ public final class TranslucentProbeMetadata {
         String baseVisualization,
         String lightingRetentionVisualization,
         String fogRetentionVisualization,
+        String cameraOverlayRetentionVisualization,
         String nearestVisualization,
         long validLightingBasePixelCount,
         long unsupportedLightingBasePixelCount,
+        long validCameraOverlayBasePixelCount,
         long overflowPixelCount,
         long saturatedFragmentCountPixels,
+        CameraOverlayRetentionResult cameraOverlayRetention,
         Map<Integer, Long> observedClassCounts
     ) {
         int pixels = TranslucentProbeBufferEncoding.requireDimensions(width, height);
@@ -48,6 +53,7 @@ public final class TranslucentProbeMetadata {
         }
         if (fogContext == null
             || lightingContext == null
+            || cameraOverlayRetention == null
             || vocabulary == null
             || artifacts == null
             || artifacts.isEmpty()) {
@@ -56,11 +62,23 @@ public final class TranslucentProbeMetadata {
         requireFileName(baseVisualization);
         requireFileName(lightingRetentionVisualization);
         requireFileName(fogRetentionVisualization);
+        requireFileName(cameraOverlayRetentionVisualization);
         requireFileName(nearestVisualization);
         requirePixelCount("valid lighting base", validLightingBasePixelCount, pixels);
         requirePixelCount("unsupported lighting base", unsupportedLightingBasePixelCount, pixels);
         if (validLightingBasePixelCount + unsupportedLightingBasePixelCount > pixels) {
             throw new IllegalArgumentException("Lighting base pixel counts exceed the image");
+        }
+        requirePixelCount(
+            "valid camera-overlay base",
+            validCameraOverlayBasePixelCount,
+            pixels
+        );
+        if (cameraOverlayRetention.getWidth() != width
+            || cameraOverlayRetention.getHeight() != height) {
+            throw new IllegalArgumentException(
+                "Camera-overlay retention dimensions do not match the metadata"
+            );
         }
         requirePixelCount("overflow", overflowPixelCount, pixels);
         requirePixelCount("fragment-count saturation", saturatedFragmentCountPixels, pixels);
@@ -118,6 +136,13 @@ public final class TranslucentProbeMetadata {
             validLightingBasePixelCount,
             unsupportedLightingBasePixelCount
         );
+        appendCameraOverlayRetention(
+            json,
+            fogContext.getPerspective(),
+            cameraOverlayRetention,
+            validCameraOverlayBasePixelCount,
+            pixels
+        );
         appendFogRetention(json, fogContext);
         json.append("  \"renderEvidence\": {\n");
         json.append("    \"baseLayers\": [\"solid\", \"cutout_mipped\", \"cutout\"],\n");
@@ -141,6 +166,7 @@ public final class TranslucentProbeMetadata {
         json.append("    \"acceptedFragmentCount\": \"uint8 saturated at 255, researcher-only\",\n");
         json.append("    \"baseLightingRetention\": \"uint8 RGB renderer-lighting response, researcher-only\",\n");
         json.append("    \"baseFogRetention\": \"uint8 fixed-function factor, researcher-only\",\n");
+        json.append("    \"baseCameraOverlayRetention\": \"uint8 retained pre-overlay RGB fraction, researcher-only\",\n");
         json.append("    \"saturatedFragmentCountPixels\": ").append(saturatedFragmentCountPixels)
             .append(",\n");
         json.append("    \"zeroAlphaPolicy\": \"discarded and explicitly excluded from vanilla zero-alpha depth-write equivalence\"\n");
@@ -173,6 +199,8 @@ public final class TranslucentProbeMetadata {
             .append(escape(lightingRetentionVisualization))
             .append("\", \"baseFogRetention\": \"")
             .append(escape(fogRetentionVisualization))
+            .append("\", \"baseCameraOverlayRetention\": \"")
+            .append(escape(cameraOverlayRetentionVisualization))
             .append("\", \"frontmostTranslucent\": \"")
             .append(escape(nearestVisualization)).append("\", \"colors\": ")
             .append("\"deterministic class-id hash; diagnostic only\"},\n");
@@ -305,6 +333,48 @@ public final class TranslucentProbeMetadata {
             .append(context.getNightVisionStrength()).append(", \"conduitPower\": ")
             .append(context.hasConduitPower()).append(", \"conduitPowerDurationTicks\": ")
             .append(context.getConduitPowerDurationTicks()).append("}\n");
+        json.append("  },\n");
+    }
+
+    private static void appendCameraOverlayRetention(
+        StringBuilder json,
+        String perspective,
+        CameraOverlayRetentionResult result,
+        long validBasePixelCount,
+        int pixels
+    ) {
+        json.append("  \"baseCameraOverlayRetention\": {\n");
+        appendString(json, "status", "valid", true, 4);
+        json.append("    \"coverage\": \"winning positive solid, cutout_mipped, or cutout base pixels\",\n");
+        json.append("    \"method\": \"original renderer-emitted camera-overlay quads mirrored over white with source RGB removed\",\n");
+        json.append("    \"supportedOverlayPaths\": [\"inside_block\", \"underwater\", \"fire\"],\n");
+        json.append("    \"overlayStageEntered\": ")
+            .append(result.wasOverlayStageEntered()).append(",\n");
+        appendString(json, "perspective", perspective, true, 4);
+        json.append("    \"activeOverlayDraws\": [");
+        int activeIndex = 0;
+        for (Map.Entry<CameraOverlayKind, Integer> entry : result.getDrawCounts().entrySet()) {
+            if (activeIndex > 0) {
+                json.append(", ");
+            }
+            json.append("{\"kind\": \"").append(entry.getKey().getMetadataName())
+                .append("\", \"drawCount\": ").append(entry.getValue()).append("}");
+            activeIndex++;
+        }
+        json.append("],\n");
+        json.append("    \"validity\": \"valid only where base.classes.u16le is positive; stored zero on background\",\n");
+        json.append("    \"validBasePixelCount\": ").append(validBasePixelCount).append(",\n");
+        json.append("    \"backgroundPixelCount\": ")
+            .append(pixels - validBasePixelCount).append(",\n");
+        json.append("    \"thresholdApplied\": false,\n");
+        json.append("    \"agentVisible\": false,\n");
+        json.append("    \"separateFromFog\": true,\n");
+        json.append("    \"perceptualVisibilityScore\": false,\n");
+        json.append("    \"serializedRendererInputs\": false,\n");
+        json.append("    \"additionalWorldQueries\": false,\n");
+        json.append("    \"resourcePackPolicy\": \"vanilla only\",\n");
+        json.append("    \"postShaderPolicy\": \"none loaded\",\n");
+        json.append("    \"unsupportedStates\": [\"fabulous graphics\", \"non-vanilla resource packs\", \"active post shader\", \"unexpected overlay draw format or count\", \"unexpected fixed-function render state\"]\n");
         json.append("  },\n");
     }
 

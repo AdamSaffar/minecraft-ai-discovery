@@ -7,14 +7,17 @@ import io.github.minecraftaidiscovery.semantic.SemanticCaptureMetadata;
 import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionCaptureContext;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayKind;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.Test;
 
 public class TranslucentProbeMetadataTest {
     @Test
-    public void marksProbeArtifactsAsResearcherOnlyAndKeepsV3Unchanged() {
+    public void marksProbeArtifactsAsResearcherOnlyAndKeepsOrdinaryV3Unchanged() {
         BlockClassVocabulary vocabulary = vocabulary();
         Map<String, TranslucentProbeMetadata.Artifact> artifacts = new LinkedHashMap<>();
         artifacts.put(
@@ -50,15 +53,18 @@ public class TranslucentProbeMetadataTest {
             "base.png",
             "base-lighting-retention.png",
             "base-fog-retention.png",
+            "base-camera-overlay-retention.png",
             "translucent-frontmost.png",
             12,
             0,
+            12,
             3,
             1,
+            overlayResult(),
             observed
         );
 
-        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v3\""));
+        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v4\""));
         assertTrue(json.contains("\"experimental\": true"));
         assertTrue(json.contains("\"researcherOnly\": true"));
         assertTrue(json.contains("\"agentVisible\": false"));
@@ -72,12 +78,22 @@ public class TranslucentProbeMetadataTest {
         assertTrue(json.contains("\"distanceMode\": \"nv_eye_radial\""));
         assertTrue(json.contains("\"baseFogRetention\": \"base-fog-retention.png\""));
         assertTrue(json.contains("\"baseLightingRetention\": \"base-lighting-retention.png\""));
+        assertTrue(json.contains(
+            "\"baseCameraOverlayRetention\": \"base-camera-overlay-retention.png\""
+        ));
+        assertTrue(json.contains("\"kind\": \"underwater\", \"drawCount\": 1"));
+        assertTrue(json.contains("\"additionalWorldQueries\": false"));
+        assertTrue(json.contains("\"perceptualVisibilityScore\": false"));
         assertTrue(json.contains("\"status\": \"valid\""));
         assertTrue(json.contains("\"thresholdApplied\": false"));
         assertTrue(json.contains("\"separateFromFog\": true"));
         assertTrue(json.contains("\"ordinaryGammaRange\": true"));
         assertTrue(json.contains(vocabulary.getFingerprintSha256()));
         assertFalse(json.contains("diagnosticRawId"));
+        assertFalse(json.contains("selectedBlock"));
+        assertFalse(json.contains("textureIdentity"));
+        assertFalse(json.contains("rawUv"));
+        assertFalse(json.contains("playerFlags"));
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -103,11 +119,14 @@ public class TranslucentProbeMetadataTest {
             "base.png",
             "lighting.png",
             "fog.png",
+            "overlay.png",
             "front.png",
             0,
             0,
             0,
             0,
+            0,
+            CameraOverlayRetentionResult.noOverlayStage(640, 360),
             new LinkedHashMap<>()
         );
     }
@@ -145,17 +164,28 @@ public class TranslucentProbeMetadataTest {
             "base.png",
             "lighting.png",
             "fog.png",
+            "overlay.png",
             "front.png",
             11,
             1,
+            12,
             0,
             0,
+            CameraOverlayRetentionResult.noOverlayStage(640, 360),
             new LinkedHashMap<>()
         );
 
         assertTrue(json.contains("\"status\": \"partial\""));
         assertTrue(json.contains("\"unsupportedBasePixelCount\": 1"));
         assertTrue(json.contains("not a measured dark value"));
+    }
+
+    private static CameraOverlayRetentionResult overlayResult() {
+        byte[] retention = new byte[640 * 360];
+        Arrays.fill(retention, (byte)230);
+        EnumMap<CameraOverlayKind, Integer> counts = new EnumMap<>(CameraOverlayKind.class);
+        counts.put(CameraOverlayKind.UNDERWATER, 1);
+        return new CameraOverlayRetentionResult(640, 360, retention, true, counts);
     }
 
     private static BlockClassVocabulary vocabulary() {

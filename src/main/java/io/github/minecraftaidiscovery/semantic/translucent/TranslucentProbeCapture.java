@@ -10,6 +10,8 @@ import io.github.minecraftaidiscovery.semantic.lighting.LightingRetentionRenderP
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntime;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionBufferEncoding;
+import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
 import java.io.IOException;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
@@ -45,7 +47,7 @@ public final class TranslucentProbeCapture {
     private TranslucentProbeCapture() {
     }
 
-    public static Path capture(
+    public static PreparedCapture prepare(
         MinecraftClient client,
         String cameraMedium,
         FogRetentionCaptureContext fogContext,
@@ -183,7 +185,7 @@ public final class TranslucentProbeCapture {
             );
             byte[] acceptedFragmentCount = readColorChannel(countTarget, ColorChannel.RED);
 
-            return writeCapture(
+            return new PreparedCapture(
                 captureDirectory,
                 client.options.graphicsMode.toString(),
                 cameraMedium,
@@ -231,7 +233,8 @@ public final class TranslucentProbeCapture {
         List<TranslucentProbeLayer> storedLayers,
         TranslucentProbeCandidates candidates,
         byte[] accumulatedOpacity,
-        byte[] acceptedFragmentCount
+        byte[] acceptedFragmentCount,
+        CameraOverlayRetentionResult cameraOverlayRetention
     ) throws IOException {
         Files.createDirectories(captureDirectory);
         byte[] baseClasses = SemanticClassEncoding.encodeU16Le(WIDTH, HEIGHT, baseClassIds);
@@ -269,12 +272,30 @@ public final class TranslucentProbeCapture {
             HEIGHT,
             baseLightingValidity
         );
+        if (cameraOverlayRetention == null
+            || cameraOverlayRetention.getWidth() != WIDTH
+            || cameraOverlayRetention.getHeight() != HEIGHT) {
+            throw new IllegalArgumentException(
+                "Camera-overlay retention dimensions do not match the F9 capture"
+            );
+        }
+        byte[] baseCameraOverlayRetention =
+            CameraOverlayRetentionBufferEncoding.maskToPositiveBase(
+                WIDTH,
+                HEIGHT,
+                cameraOverlayRetention.copyFullScreenRetention(),
+                baseClassIds
+            );
+        long validCameraOverlayBasePixelCount = Arrays.stream(baseClassIds)
+            .filter(classId -> classId != BlockClassManifest.BACKGROUND_CLASS_ID)
+            .count();
 
         String baseClassesFile = "base.classes.u16le";
         String baseDepthFile = "base.depth.f32le";
         String baseLightingRetentionFile = "base.lighting-retention.rgb8";
         String baseLightingValidityFile = "base.lighting-validity.u8";
         String baseFogRetentionFile = "base.fog-retention.u8";
+        String baseCameraOverlayRetentionFile = "base.camera-overlay-retention.u8";
         String solidFluidFile = "solid-fluid.frontmost.bin";
         String frontToBackFile = "translucent.front-to-back.bin";
         String rankedFile = "translucent.contribution-ranked.bin";
@@ -284,6 +305,8 @@ public final class TranslucentProbeCapture {
         String baseVisualizationFile = "base.png";
         String lightingRetentionVisualizationFile = "base-lighting-retention.png";
         String fogRetentionVisualizationFile = "base-fog-retention.png";
+        String cameraOverlayRetentionVisualizationFile =
+            "base-camera-overlay-retention.png";
         String nearestVisualizationFile = "translucent-frontmost.png";
 
         write(captureDirectory, baseClassesFile, baseClasses);
@@ -291,6 +314,11 @@ public final class TranslucentProbeCapture {
         write(captureDirectory, baseLightingRetentionFile, baseLightingRetention);
         write(captureDirectory, baseLightingValidityFile, baseLightingValidity);
         write(captureDirectory, baseFogRetentionFile, baseFogRetention);
+        write(
+            captureDirectory,
+            baseCameraOverlayRetentionFile,
+            baseCameraOverlayRetention
+        );
         write(captureDirectory, solidFluidFile, encodedSolidFluid);
         write(captureDirectory, frontToBackFile, frontToBack);
         write(captureDirectory, rankedFile, ranked);
@@ -305,6 +333,10 @@ public final class TranslucentProbeCapture {
         writeGrayscaleVisualization(
             captureDirectory.resolve(fogRetentionVisualizationFile),
             baseFogRetention
+        );
+        writeGrayscaleVisualization(
+            captureDirectory.resolve(cameraOverlayRetentionVisualizationFile),
+            baseCameraOverlayRetention
         );
         writeVisualization(
             captureDirectory.resolve(nearestVisualizationFile),
@@ -345,6 +377,15 @@ public final class TranslucentProbeCapture {
                 "uint8 fixed-function fog retention; 0 fully fogged, 255 unfogged",
                 1,
                 baseFogRetention
+            )
+        );
+        artifacts.put(
+            "baseCameraOverlayRetention",
+            artifact(
+                baseCameraOverlayRetentionFile,
+                CameraOverlayRetentionBufferEncoding.ENCODING,
+                1,
+                baseCameraOverlayRetention
             )
         );
         artifacts.put(
@@ -397,11 +438,14 @@ public final class TranslucentProbeCapture {
             baseVisualizationFile,
             lightingRetentionVisualizationFile,
             fogRetentionVisualizationFile,
+            cameraOverlayRetentionVisualizationFile,
             nearestVisualizationFile,
             validLightingBasePixelCount,
             unsupportedLightingBasePixelCount,
+            validCameraOverlayBasePixelCount,
             candidates.getOverflowPixelCount(),
             saturatedFragmentCountPixels,
+            cameraOverlayRetention,
             observedClasses(solidFluid, storedLayers)
         );
         Path metadataPath = captureDirectory.resolve("metadata.json");
@@ -750,6 +794,102 @@ public final class TranslucentProbeCapture {
     private enum ColorChannel {
         RED,
         ALPHA
+    }
+
+    public static final class PreparedCapture {
+        // Existing F9 arrays stay in memory until this frame's camera-overlay pass ends.
+        private final Path captureDirectory;
+        private final String graphicsMode;
+        private final String cameraMedium;
+        private final Collection<String> resourcePacks;
+        private final FogRetentionCaptureContext fogContext;
+        private final LightingRetentionCaptureContext lightingContext;
+        private final BlockClassVocabulary vocabulary;
+        private final int[] baseClassIds;
+        private final float[] baseDepth;
+        private final byte[] baseLightingRetention;
+        private final byte[] baseLightingValidity;
+        private final long validLightingBasePixelCount;
+        private final long unsupportedLightingBasePixelCount;
+        private final byte[] baseFogRetention;
+        private final TranslucentProbeLayer solidFluid;
+        private final List<TranslucentProbeLayer> storedLayers;
+        private final TranslucentProbeCandidates candidates;
+        private final byte[] accumulatedOpacity;
+        private final byte[] acceptedFragmentCount;
+        private boolean completed;
+
+        private PreparedCapture(
+            Path captureDirectory,
+            String graphicsMode,
+            String cameraMedium,
+            Collection<String> resourcePacks,
+            FogRetentionCaptureContext fogContext,
+            LightingRetentionCaptureContext lightingContext,
+            BlockClassVocabulary vocabulary,
+            int[] baseClassIds,
+            float[] baseDepth,
+            byte[] baseLightingRetention,
+            byte[] baseLightingValidity,
+            long validLightingBasePixelCount,
+            long unsupportedLightingBasePixelCount,
+            byte[] baseFogRetention,
+            TranslucentProbeLayer solidFluid,
+            List<TranslucentProbeLayer> storedLayers,
+            TranslucentProbeCandidates candidates,
+            byte[] accumulatedOpacity,
+            byte[] acceptedFragmentCount
+        ) {
+            this.captureDirectory = captureDirectory;
+            this.graphicsMode = graphicsMode;
+            this.cameraMedium = cameraMedium;
+            this.resourcePacks = new ArrayList<>(resourcePacks);
+            this.fogContext = fogContext;
+            this.lightingContext = lightingContext;
+            this.vocabulary = vocabulary;
+            this.baseClassIds = baseClassIds;
+            this.baseDepth = baseDepth;
+            this.baseLightingRetention = baseLightingRetention;
+            this.baseLightingValidity = baseLightingValidity;
+            this.validLightingBasePixelCount = validLightingBasePixelCount;
+            this.unsupportedLightingBasePixelCount = unsupportedLightingBasePixelCount;
+            this.baseFogRetention = baseFogRetention;
+            this.solidFluid = solidFluid;
+            this.storedLayers = new ArrayList<>(storedLayers);
+            this.candidates = candidates;
+            this.accumulatedOpacity = accumulatedOpacity;
+            this.acceptedFragmentCount = acceptedFragmentCount;
+        }
+
+        public Path complete(CameraOverlayRetentionResult cameraOverlayRetention)
+            throws IOException {
+            if (completed) {
+                throw new IllegalStateException("Prepared F9 capture was already completed");
+            }
+            completed = true;
+            return writeCapture(
+                captureDirectory,
+                graphicsMode,
+                cameraMedium,
+                resourcePacks,
+                fogContext,
+                lightingContext,
+                vocabulary,
+                baseClassIds,
+                baseDepth,
+                baseLightingRetention,
+                baseLightingValidity,
+                validLightingBasePixelCount,
+                unsupportedLightingBasePixelCount,
+                baseFogRetention,
+                solidFluid,
+                storedLayers,
+                candidates,
+                accumulatedOpacity,
+                acceptedFragmentCount,
+                cameraOverlayRetention
+            );
+        }
     }
 
     private static final class LightingReadback {
