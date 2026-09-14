@@ -23,14 +23,16 @@ public class BaseInfluenceProbeDirectoryReaderTest {
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     @Test
-    public void readsVersionFiveArtifactsAndComposesTheirValues() throws IOException {
-        Path capture = createCapture("probe-v5", "translucent-observation-probe-v5", 5);
+    public void readsVersionSixArtifactsAndComposesTheirValues() throws IOException {
+        Path capture = createCapture("probe-v6", "translucent-observation-probe-v6", 6);
         writePixel(capture, 0, 513, 200, 100, 50, 255, 128, 64, 0, 127, 0);
         writePixel(capture, 1, 8, 255, 255, 255, 0, 255, 0, 1, 255, 255);
+        writeValues(capture, "frame.pre-hud-rgb.rgb8", 0, 9, 8, 7);
 
         BaseInfluenceProbeCapture loaded = BaseInfluenceProbeDirectoryReader.read(capture);
 
-        assertEquals("probe-v5", loaded.getCaptureName());
+        assertEquals("probe-v6", loaded.getCaptureName());
+        assertArrayEquals(new byte[] {9, 8, 7}, firstRgb(loaded.getSameFrameRgb().copyRgb()));
         assertArrayEquals(
             new byte[] {
                 (byte)expectedProduct(200, 128, 191, 127),
@@ -52,15 +54,15 @@ public class BaseInfluenceProbeDirectoryReaderTest {
     }
 
     @Test
-    public void readsOnlyVersionFiveDirectoriesFromAMixedRoot() throws IOException {
+    public void readsOnlyVersionSixDirectoriesFromAMixedRoot() throws IOException {
         Path root = temporaryFolder.newFolder("probe-root").toPath();
-        Path versionFive = root.resolve("probe-2");
-        Path versionFour = root.resolve("probe-1");
+        Path versionSix = root.resolve("probe-2");
+        Path versionFive = root.resolve("probe-1");
+        createCapture(versionSix, "translucent-observation-probe-v6", 6);
         createCapture(versionFive, "translucent-observation-probe-v5", 5);
-        createCapture(versionFour, "translucent-observation-probe-v4", 4);
 
         List<BaseInfluenceProbeCapture> captures =
-            BaseInfluenceProbeDirectoryReader.readAllVersionFive(root);
+            BaseInfluenceProbeDirectoryReader.readAllVersionSix(root);
 
         assertEquals(1, captures.size());
         assertEquals("probe-2", captures.get(0).getCaptureName());
@@ -68,13 +70,13 @@ public class BaseInfluenceProbeDirectoryReaderTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void rejectsOlderFormatWhenReadDirectly() throws IOException {
-        Path capture = createCapture("probe-v4", "translucent-observation-probe-v4", 4);
+        Path capture = createCapture("probe-v5", "translucent-observation-probe-v5", 5);
         BaseInfluenceProbeDirectoryReader.read(capture);
     }
 
     @Test(expected = IllegalArgumentException.class)
     public void rejectsDeclaredArtifactLengthMismatch() throws IOException {
-        Path capture = createCapture("wrong-length", "translucent-observation-probe-v5", 5);
+        Path capture = createCapture("wrong-length", "translucent-observation-probe-v6", 6);
         Path metadata = capture.resolve("metadata.json");
         String json = new String(Files.readAllBytes(metadata), StandardCharsets.UTF_8)
             .replace("\"byteLength\": 460800", "\"byteLength\": 2");
@@ -84,14 +86,14 @@ public class BaseInfluenceProbeDirectoryReaderTest {
 
     @Test(expected = IllegalArgumentException.class)
     public void rejectsTruncatedArtifact() throws IOException {
-        Path capture = createCapture("truncated", "translucent-observation-probe-v5", 5);
+        Path capture = createCapture("truncated", "translucent-observation-probe-v6", 6);
         Files.write(capture.resolve("base.fog-retention.u8"), new byte[PIXELS - 1]);
         BaseInfluenceProbeDirectoryReader.read(capture);
     }
 
     @Test(expected = IllegalArgumentException.class)
     public void rejectsMetadataThatMarksTheProbeAgentVisible() throws IOException {
-        Path capture = createCapture("agent-visible", "translucent-observation-probe-v5", 5);
+        Path capture = createCapture("agent-visible", "translucent-observation-probe-v6", 6);
         Path metadata = capture.resolve("metadata.json");
         String json = new String(Files.readAllBytes(metadata), StandardCharsets.UTF_8)
             .replace(
@@ -102,32 +104,63 @@ public class BaseInfluenceProbeDirectoryReaderTest {
         BaseInfluenceProbeDirectoryReader.read(capture);
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsMissingSameFrameRgbArtifact() throws IOException {
+        Path capture = createCapture("missing-rgb", "translucent-observation-probe-v6", 6);
+        Files.delete(capture.resolve("frame.pre-hud-rgb.rgb8"));
+        BaseInfluenceProbeDirectoryReader.read(capture);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsTruncatedSameFrameRgbArtifact() throws IOException {
+        Path capture = createCapture("short-rgb", "translucent-observation-probe-v6", 6);
+        Files.write(
+            capture.resolve("frame.pre-hud-rgb.rgb8"),
+            new byte[SameFrameRgbEncoding.expectedRgbLength() - 1]
+        );
+        BaseInfluenceProbeDirectoryReader.read(capture);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsIncompatibleSameFrameRgbMetadata() throws IOException {
+        Path capture = createCapture("bad-rgb-policy", "translucent-observation-probe-v6", 6);
+        Path metadata = capture.resolve("metadata.json");
+        String json = new String(Files.readAllBytes(metadata), StandardCharsets.UTF_8)
+            .replace("\"additionalRenderPass\": false", "\"additionalRenderPass\": true");
+        Files.write(metadata, json.getBytes(StandardCharsets.UTF_8));
+        BaseInfluenceProbeDirectoryReader.read(capture);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void rejectsLinkedArtifactType() {
+        BaseInfluenceProbeDirectoryReader.requireSafeArtifactType(
+            "frame.pre-hud-rgb.rgb8",
+            false,
+            true
+        );
+    }
+
     @Test
     public void summarizesSupportedAndUnsupportedPixelsSeparately() {
-        byte[] reasons = {
-            0,
-            1,
-            2,
-            4,
-            8,
-            (byte)(2 | 4 | 8)
-        };
-        byte[] rgb = {
-            0, 0, 0,
-            10, 20, 30,
-            0, 0, 0,
-            0, 0, 0,
-            0, 0, 0,
-            0, 0, 0
-        };
+        byte[] reasons = new byte[PIXELS];
+        reasons[1] = 1;
+        reasons[2] = 2;
+        reasons[3] = 4;
+        reasons[4] = 8;
+        reasons[5] = (byte)(2 | 4 | 8);
+        byte[] rgb = new byte[PIXELS * 3];
+        rgb[3] = 10;
+        rgb[4] = 20;
+        rgb[5] = 30;
         BaseInfluenceProbeSummary summary = BaseInfluenceProbeSummary.from(
             new BaseInfluenceProbeCapture(
                 "summary",
-                new BaseInfluenceCompositionResult(6, 1, rgb, reasons)
+                new BaseInfluenceCompositionResult(WIDTH, HEIGHT, rgb, reasons),
+                SameFrameRgbEncoding.fromTopToBottomRgb(new byte[PIXELS * 3])
             )
         );
 
-        assertEquals(1, summary.getBackgroundPixels());
+        assertEquals(PIXELS - 5, summary.getBackgroundPixels());
         assertEquals(1, summary.getSupportedPixels());
         assertEquals(2, summary.getUnsupportedLightingPixels());
         assertEquals(2, summary.getOverflowPixels());
@@ -152,6 +185,7 @@ public class BaseInfluenceProbeDirectoryReaderTest {
         write(capture, "base.first-person-depth-coverage.u8", new byte[PIXELS]);
         write(capture, "translucent.accumulated-opacity.u8", new byte[PIXELS]);
         write(capture, "translucent.storage-overflow.u8", new byte[PIXELS]);
+        write(capture, "frame.pre-hud-rgb.rgb8", new byte[PIXELS * 3]);
         Files.write(
             capture.resolve("metadata.json"),
             metadata(format, formatVersion).getBytes(StandardCharsets.UTF_8)
@@ -232,6 +266,24 @@ public class BaseInfluenceProbeDirectoryReaderTest {
             + "  \"baseFirstPersonDepthCoverage\": {\"status\": \"valid\", "
             + "\"visibilityThresholdApplied\": false, \"agentVisible\": false, "
             + "\"opacityOrRetentionMeasurement\": false},\n"
+            + "  \"sameFrameRgb\": {\"status\": \"valid\", "
+            + "\"captureBoundary\": \"render_hand_return\", "
+            + "\"handAndCameraOverlayStageComplete\": true, "
+            + "\"overlayStageEntered\": true, "
+            + "\"firstPersonDepthCoverageOnPositiveBasePixels\": false, "
+            + "\"sourceWidth\": 1920, \"sourceHeight\": 1080, "
+            + "\"width\": 640, \"height\": 360, "
+            + "\"byteLength\": " + SameFrameRgbEncoding.expectedRgbLength() + ", "
+            + "\"encoding\": \"" + SameFrameRgbEncoding.ENCODING + "\", "
+            + "\"pixelOrder\": \"row-major, top-left origin\", "
+            + "\"channelOrder\": \"RGB\", "
+            + "\"downsampleFactor\": 3, \"sameFrameAsProbeBuffers\": true, "
+            + "\"preHud\": true, \"preMenu\": true, \"prePostProcess\": true, "
+            + "\"additionalRenderPass\": false, "
+            + "\"additionalPlayerOrWorldQueries\": false, "
+            + "\"rawNativeResolutionSerialized\": false, "
+            + "\"thresholdApplied\": false, \"agentVisible\": false, "
+            + "\"perceptualVisibilityScore\": false},\n"
             + "  \"temporaryStorage\": {\"capacity\": 4, \"productionK\": false},\n"
             + "  \"artifacts\": {\n"
             + artifact("baseClasses", "base.classes.u16le", 2)
@@ -245,17 +297,16 @@ public class BaseInfluenceProbeDirectoryReaderTest {
                 1
             )
             + artifact("accumulatedOpacity", "translucent.accumulated-opacity.u8", 1)
-            + artifactLast("storageOverflow", "translucent.storage-overflow.u8", 1)
+            + artifact("storageOverflow", "translucent.storage-overflow.u8", 1)
+            + "    \"framePreHudRgb\": {\"file\": \"frame.pre-hud-rgb.rgb8\", "
+            + "\"encoding\": \"" + SameFrameRgbEncoding.ENCODING + "\", "
+            + "\"bytesPerPixel\": 3, \"byteLength\": " + (PIXELS * 3) + "}\n"
             + "  }\n"
             + "}\n";
     }
 
     private static String artifact(String key, String file, int bytesPerPixel) {
         return artifactValue(key, file, bytesPerPixel) + ",\n";
-    }
-
-    private static String artifactLast(String key, String file, int bytesPerPixel) {
-        return artifactValue(key, file, bytesPerPixel) + "\n";
     }
 
     private static String artifactValue(String key, String file, int bytesPerPixel) {

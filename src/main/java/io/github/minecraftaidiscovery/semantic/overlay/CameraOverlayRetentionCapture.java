@@ -2,10 +2,14 @@ package io.github.minecraftaidiscovery.semantic.overlay;
 
 import io.github.minecraftaidiscovery.semantic.firstperson.FirstPersonDepthCoverageResult;
 import io.github.minecraftaidiscovery.semantic.translucent.TranslucentProbeCapture;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBoundary;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbGpuCapture;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbResult;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.function.Supplier;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.VertexFormat;
 
@@ -20,10 +24,21 @@ public final class CameraOverlayRetentionCapture {
         if (capture == null) {
             throw new IllegalArgumentException("Prepared F9 capture is missing");
         }
+        schedule(capture::complete);
+    }
+
+    static void scheduleForTesting(PendingCompletion completion) {
+        schedule(completion);
+    }
+
+    private static void schedule(PendingCompletion completion) {
+        if (completion == null) {
+            throw new IllegalArgumentException("Prepared F9 completion is missing");
+        }
         if (PENDING.get() != null) {
             throw new IllegalStateException("An F9 camera-overlay capture is already pending");
         }
-        PENDING.set(new State(capture));
+        PENDING.set(new State(completion));
     }
 
     public static void beginOverlayStage(MinecraftClient client) {
@@ -97,12 +112,27 @@ public final class CameraOverlayRetentionCapture {
         }
     }
 
-    public static Path completePending() throws IOException {
+    public static Path completePending(SameFrameRgbCaptureBoundary boundary)
+        throws IOException {
+        return completePending(
+            boundary,
+            () -> SameFrameRgbGpuCapture.capture(MinecraftClient.getInstance())
+        );
+    }
+
+    static Path completePending(
+        SameFrameRgbCaptureBoundary boundary,
+        Supplier<SameFrameRgbResult> sameFrameRgbCapture
+    ) throws IOException {
         State state = PENDING.get();
         if (state == null) {
             return null;
         }
         PENDING.remove();
+        if (boundary == null || sameFrameRgbCapture == null) {
+            state.abortGpu();
+            throw new IllegalArgumentException("Same-frame RGB completion input is missing");
+        }
         if (state.failure != null) {
             state.abortGpu();
             throw new IllegalStateException(
@@ -111,35 +141,59 @@ public final class CameraOverlayRetentionCapture {
             );
         }
 
-        Map<CameraOverlayKind, Integer> drawCounts = state.tracker.finish();
-        FirstPersonDepthCoverageResult firstPersonDepthCoverage = state.gpu == null
-            ? FirstPersonDepthCoverageResult.noFirstPersonStage(
-                TranslucentProbeCapture.WIDTH,
-                TranslucentProbeCapture.HEIGHT
-            )
-            : state.gpu.getFirstPersonDepthCoverage();
-        CameraOverlayRetentionResult result = state.gpu == null
-            ? CameraOverlayRetentionResult.noOverlayStage(
-                TranslucentProbeCapture.WIDTH,
-                TranslucentProbeCapture.HEIGHT
-            )
-            : state.gpu.finish(state.tracker.wasOverlayStageEntered(), drawCounts);
-        return state.capture.complete(result, firstPersonDepthCoverage);
+        try {
+            SameFrameRgbResult sameFrameRgb = sameFrameRgbCapture.get();
+            if (sameFrameRgb == null) {
+                throw new IllegalStateException("Same-frame RGB readback returned no result");
+            }
+            Map<CameraOverlayKind, Integer> drawCounts = state.tracker.finish();
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage = state.gpu == null
+                ? FirstPersonDepthCoverageResult.noFirstPersonStage(
+                    TranslucentProbeCapture.WIDTH,
+                    TranslucentProbeCapture.HEIGHT
+                )
+                : state.gpu.getFirstPersonDepthCoverage();
+            CameraOverlayRetentionResult result = state.gpu == null
+                ? CameraOverlayRetentionResult.noOverlayStage(
+                    TranslucentProbeCapture.WIDTH,
+                    TranslucentProbeCapture.HEIGHT
+                )
+                : state.gpu.finish(state.tracker.wasOverlayStageEntered(), drawCounts);
+            return state.completion.complete(
+                result,
+                firstPersonDepthCoverage,
+                sameFrameRgb,
+                boundary
+            );
+        } catch (IOException | RuntimeException exception) {
+            state.abortGpu();
+            throw exception;
+        }
     }
 
     static boolean hasPendingForTesting() {
         return PENDING.get() != null;
     }
 
+    @FunctionalInterface
+    interface PendingCompletion {
+        Path complete(
+            CameraOverlayRetentionResult cameraOverlayRetention,
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage,
+            SameFrameRgbResult sameFrameRgb,
+            SameFrameRgbCaptureBoundary sameFrameRgbBoundary
+        ) throws IOException;
+    }
+
     private static final class State {
-        private final TranslucentProbeCapture.PreparedCapture capture;
+        private final PendingCompletion completion;
         private final CameraOverlayRetentionTracker tracker =
             new CameraOverlayRetentionTracker();
         private CameraOverlayRetentionGpuTransport.Session gpu;
         private RuntimeException failure;
 
-        private State(TranslucentProbeCapture.PreparedCapture capture) {
-            this.capture = capture;
+        private State(PendingCompletion completion) {
+            this.completion = completion;
         }
 
         private void fail(RuntimeException exception) {

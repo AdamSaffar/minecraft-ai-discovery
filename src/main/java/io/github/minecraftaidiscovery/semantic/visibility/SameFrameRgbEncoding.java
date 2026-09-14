@@ -70,6 +70,17 @@ public final class SameFrameRgbEncoding {
         );
     }
 
+    public static SameFrameRgbResult fromTopToBottomRgb(byte[] topToBottomRgb) {
+        requireRgb(topToBottomRgb);
+        return new SameFrameRgbResult(
+            SOURCE_WIDTH,
+            SOURCE_HEIGHT,
+            WIDTH,
+            HEIGHT,
+            topToBottomRgb
+        );
+    }
+
     public static int expectedSourceLength() {
         return Math.multiplyExact(
             Math.multiplyExact(SOURCE_WIDTH, SOURCE_HEIGHT),

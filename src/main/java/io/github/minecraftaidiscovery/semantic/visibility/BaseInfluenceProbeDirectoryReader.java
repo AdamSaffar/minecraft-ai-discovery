@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -37,7 +38,7 @@ public final class BaseInfluenceProbeDirectoryReader {
         int width = requireInt(metadata, "width");
         int height = requireInt(metadata, "height");
         if (width != EXPECTED_WIDTH || height != EXPECTED_HEIGHT) {
-            throw new IllegalArgumentException("Version-5 probe dimensions must be 640 x 360");
+            throw new IllegalArgumentException("Version-6 probe dimensions must be 640 x 360");
         }
         int pixels = BaseInfluenceComposition.requireDimensions(width, height);
         JsonObject artifacts = requireObject(metadata, "artifacts");
@@ -107,6 +108,22 @@ public final class BaseInfluenceProbeDirectoryReader {
             1,
             pixels
         );
+        JsonObject sameFrameRgbArtifact = requireObject(artifacts, "framePreHudRgb");
+        requireString(
+            sameFrameRgbArtifact,
+            "encoding",
+            SameFrameRgbEncoding.ENCODING
+        );
+        byte[] sameFrameRgbBytes = readArtifact(
+            directory,
+            artifacts,
+            "framePreHudRgb",
+            "frame.pre-hud-rgb.rgb8",
+            SameFrameRgbEncoding.RGB_BYTES_PER_PIXEL,
+            pixels
+        );
+        SameFrameRgbResult sameFrameRgb =
+            SameFrameRgbEncoding.fromTopToBottomRgb(sameFrameRgbBytes);
 
         BaseInfluenceCompositionResult composition = BaseInfluenceComposition.compose(
             width,
@@ -122,11 +139,12 @@ public final class BaseInfluenceProbeDirectoryReader {
         );
         return new BaseInfluenceProbeCapture(
             directory.getFileName().toString(),
-            composition
+            composition,
+            sameFrameRgb
         );
     }
 
-    public static List<BaseInfluenceProbeCapture> readAllVersionFive(Path probeRoot)
+    public static List<BaseInfluenceProbeCapture> readAllVersionSix(Path probeRoot)
         throws IOException {
         Path root = requireDirectory(probeRoot);
         List<Path> directories;
@@ -192,6 +210,53 @@ public final class BaseInfluenceProbeDirectoryReader {
         requireBoolean(firstPerson, "visibilityThresholdApplied", false);
         requireBoolean(firstPerson, "agentVisible", false);
         requireBoolean(firstPerson, "opacityOrRetentionMeasurement", false);
+
+        JsonObject sameFrameRgb = requireObject(metadata, "sameFrameRgb");
+        requireString(sameFrameRgb, "status", "valid");
+        String captureBoundary = requireOneOf(
+            sameFrameRgb,
+            "captureBoundary",
+            SameFrameRgbCaptureBoundary.RENDER_HAND_RETURN.getMetadataName(),
+            SameFrameRgbCaptureBoundary.RENDER_WORLD_RETURN_WITHOUT_HAND.getMetadataName()
+        );
+        requireBoolean(
+            sameFrameRgb,
+            "handAndCameraOverlayStageComplete",
+            SameFrameRgbCaptureBoundary.RENDER_HAND_RETURN.getMetadataName()
+                .equals(captureBoundary)
+        );
+        requireBooleanValue(sameFrameRgb, "overlayStageEntered");
+        requireBooleanValue(
+            sameFrameRgb,
+            "firstPersonDepthCoverageOnPositiveBasePixels"
+        );
+        requireInt(sameFrameRgb, "sourceWidth", SameFrameRgbEncoding.SOURCE_WIDTH);
+        requireInt(sameFrameRgb, "sourceHeight", SameFrameRgbEncoding.SOURCE_HEIGHT);
+        requireInt(sameFrameRgb, "width", SameFrameRgbEncoding.WIDTH);
+        requireInt(sameFrameRgb, "height", SameFrameRgbEncoding.HEIGHT);
+        requireInt(
+            sameFrameRgb,
+            "byteLength",
+            SameFrameRgbEncoding.expectedRgbLength()
+        );
+        requireString(sameFrameRgb, "encoding", SameFrameRgbEncoding.ENCODING);
+        requireString(sameFrameRgb, "pixelOrder", "row-major, top-left origin");
+        requireString(sameFrameRgb, "channelOrder", "RGB");
+        requireInt(
+            sameFrameRgb,
+            "downsampleFactor",
+            SameFrameRgbEncoding.DOWNSAMPLE_FACTOR
+        );
+        requireBoolean(sameFrameRgb, "sameFrameAsProbeBuffers", true);
+        requireBoolean(sameFrameRgb, "preHud", true);
+        requireBoolean(sameFrameRgb, "preMenu", true);
+        requireBoolean(sameFrameRgb, "prePostProcess", true);
+        requireBoolean(sameFrameRgb, "additionalRenderPass", false);
+        requireBoolean(sameFrameRgb, "additionalPlayerOrWorldQueries", false);
+        requireBoolean(sameFrameRgb, "rawNativeResolutionSerialized", false);
+        requireBoolean(sameFrameRgb, "thresholdApplied", false);
+        requireBoolean(sameFrameRgb, "agentVisible", false);
+        requireBoolean(sameFrameRgb, "perceptualVisibilityScore", false);
 
         JsonObject storage = requireObject(metadata, "temporaryStorage");
         requireInt(storage, "capacity", TranslucentProbeCandidates.TEMPORARY_STORAGE_CAPACITY);
@@ -270,8 +335,32 @@ public final class BaseInfluenceProbeDirectoryReader {
     }
 
     private static void requireRegularFile(Path path, String name) {
-        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalArgumentException("Probe artifact is missing: " + name);
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(
+                path,
+                BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS
+            );
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Probe artifact is missing: " + name, exception);
+        }
+        requireSafeArtifactType(
+            name,
+            attributes.isRegularFile(),
+            attributes.isSymbolicLink()
+        );
+    }
+
+    static void requireSafeArtifactType(
+        String name,
+        boolean regularFile,
+        boolean symbolicLink
+    ) {
+        if (!regularFile || symbolicLink) {
+            throw new IllegalArgumentException(
+                "Probe artifact must be an unlinked regular file: " + name
+            );
         }
     }
 
@@ -329,22 +418,31 @@ public final class BaseInfluenceProbeDirectoryReader {
     }
 
     private static void requireBoolean(JsonObject parent, String name, boolean expected) {
-        JsonElement value = parent.get(name);
-        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
-            throw new IllegalArgumentException("Probe metadata boolean is missing: " + name);
-        }
-        if (value.getAsBoolean() != expected) {
+        boolean actual = requireBooleanValue(parent, name);
+        if (actual != expected) {
             throw new IllegalArgumentException(
                 "Probe metadata " + name + " must be " + expected
             );
         }
     }
 
-    private static void requireOneOf(JsonObject parent, String name, String... expectedValues) {
+    private static boolean requireBooleanValue(JsonObject parent, String name) {
+        JsonElement value = parent.get(name);
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
+            throw new IllegalArgumentException("Probe metadata boolean is missing: " + name);
+        }
+        return value.getAsBoolean();
+    }
+
+    private static String requireOneOf(
+        JsonObject parent,
+        String name,
+        String... expectedValues
+    ) {
         String actual = optionalString(parent, name);
         for (String expected : expectedValues) {
             if (expected.equals(actual)) {
-                return;
+                return actual;
             }
         }
         throw new IllegalArgumentException("Probe metadata " + name + " is unsupported: " + actual);

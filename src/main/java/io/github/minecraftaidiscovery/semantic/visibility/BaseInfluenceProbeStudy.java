@@ -15,9 +15,9 @@ public final class BaseInfluenceProbeStudy {
         }
         Path probeRoot = Paths.get(arguments[0]);
         List<BaseInfluenceProbeCapture> captures =
-            BaseInfluenceProbeDirectoryReader.readAllVersionFive(probeRoot);
+            BaseInfluenceProbeDirectoryReader.readAllVersionSix(probeRoot);
         if (captures.isEmpty()) {
-            throw new IllegalArgumentException("No version-5 probe directories were found");
+            throw new IllegalArgumentException("No version-6 probe directories were found");
         }
 
         System.out.println(

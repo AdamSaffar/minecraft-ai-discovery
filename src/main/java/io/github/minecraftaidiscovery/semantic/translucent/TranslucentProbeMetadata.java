@@ -8,6 +8,9 @@ import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayKind;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBoundary;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbEncoding;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbResult;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -15,8 +18,8 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public final class TranslucentProbeMetadata {
-    public static final int FORMAT_VERSION = 5;
-    public static final String FORMAT_NAME = "translucent-observation-probe-v5";
+    public static final int FORMAT_VERSION = 6;
+    public static final String FORMAT_NAME = "translucent-observation-probe-v6";
 
     private TranslucentProbeMetadata() {
     }
@@ -37,6 +40,7 @@ public final class TranslucentProbeMetadata {
         String cameraOverlayRetentionVisualization,
         String firstPersonDepthCoverageVisualization,
         String nearestVisualization,
+        String sameFrameRgbVisualization,
         long validLightingBasePixelCount,
         long unsupportedLightingBasePixelCount,
         long positiveBasePixelCount,
@@ -46,6 +50,8 @@ public final class TranslucentProbeMetadata {
         long saturatedFragmentCountPixels,
         CameraOverlayRetentionResult cameraOverlayRetention,
         FirstPersonDepthCoverageResult firstPersonDepthCoverage,
+        SameFrameRgbResult sameFrameRgb,
+        SameFrameRgbCaptureBoundary sameFrameRgbBoundary,
         Map<Integer, Long> observedClassCounts
     ) {
         int pixels = TranslucentProbeBufferEncoding.requireDimensions(width, height);
@@ -61,6 +67,8 @@ public final class TranslucentProbeMetadata {
             || lightingContext == null
             || cameraOverlayRetention == null
             || firstPersonDepthCoverage == null
+            || sameFrameRgb == null
+            || sameFrameRgbBoundary == null
             || vocabulary == null
             || artifacts == null
             || artifacts.isEmpty()) {
@@ -72,6 +80,7 @@ public final class TranslucentProbeMetadata {
         requireFileName(cameraOverlayRetentionVisualization);
         requireFileName(firstPersonDepthCoverageVisualization);
         requireFileName(nearestVisualization);
+        requireFileName(sameFrameRgbVisualization);
         requirePixelCount("valid lighting base", validLightingBasePixelCount, pixels);
         requirePixelCount("unsupported lighting base", unsupportedLightingBasePixelCount, pixels);
         if (validLightingBasePixelCount + unsupportedLightingBasePixelCount > pixels) {
@@ -92,6 +101,22 @@ public final class TranslucentProbeMetadata {
             || firstPersonDepthCoverage.getHeight() != height) {
             throw new IllegalArgumentException(
                 "First-person depth-coverage dimensions do not match the metadata"
+            );
+        }
+        if (sameFrameRgb.getSourceWidth() != SameFrameRgbEncoding.SOURCE_WIDTH
+            || sameFrameRgb.getSourceHeight() != SameFrameRgbEncoding.SOURCE_HEIGHT
+            || sameFrameRgb.getWidth() != width
+            || sameFrameRgb.getHeight() != height) {
+            throw new IllegalArgumentException(
+                "Same-frame RGB dimensions do not match the metadata"
+            );
+        }
+        if (sameFrameRgbBoundary
+                == SameFrameRgbCaptureBoundary.RENDER_WORLD_RETURN_WITHOUT_HAND
+            && (cameraOverlayRetention.wasOverlayStageEntered()
+                || firstPersonDepthCoverage.wasPostHandDepthSampled())) {
+            throw new IllegalArgumentException(
+                "Fallback same-frame RGB boundary conflicts with completed hand-stage data"
             );
         }
         if (firstPersonDepthCoverage.wasPostHandDepthSampled()
@@ -170,6 +195,13 @@ public final class TranslucentProbeMetadata {
         appendStringArray(json, "resourcePacks", resourcePacks);
         json.append("  \"manifest\": {\"entryCount\": ").append(vocabulary.getEntryCount())
             .append(", \"sha256\": \"").append(vocabulary.getFingerprintSha256()).append("\"},\n");
+        appendSameFrameRgb(
+            json,
+            sameFrameRgb,
+            sameFrameRgbBoundary,
+            cameraOverlayRetention.wasOverlayStageEntered(),
+            coveredBasePixelCount > 0
+        );
         appendLightingRetention(
             json,
             lightingContext,
@@ -217,6 +249,7 @@ public final class TranslucentProbeMetadata {
         json.append("    \"baseFogRetention\": \"uint8 fixed-function factor, researcher-only\",\n");
         json.append("    \"baseCameraOverlayRetention\": \"uint8 retained pre-overlay RGB fraction, researcher-only\",\n");
         json.append("    \"baseFirstPersonDepthCoverage\": \"uint8 binary post-hand depth write, researcher-only\",\n");
+        json.append("    \"sameFrameRgb\": \"uint8 RGB pre-HUD main-framebuffer sample, researcher-only\",\n");
         json.append("    \"saturatedFragmentCountPixels\": ").append(saturatedFragmentCountPixels)
             .append(",\n");
         json.append("    \"zeroAlphaPolicy\": \"discarded and explicitly excluded from vanilla zero-alpha depth-write equivalence\"\n");
@@ -254,7 +287,8 @@ public final class TranslucentProbeMetadata {
             .append("\", \"baseFirstPersonDepthCoverage\": \"")
             .append(escape(firstPersonDepthCoverageVisualization))
             .append("\", \"frontmostTranslucent\": \"")
-            .append(escape(nearestVisualization)).append("\", \"colors\": ")
+            .append(escape(nearestVisualization)).append("\", \"sameFrameRgb\": \"")
+            .append(escape(sameFrameRgbVisualization)).append("\", \"colors\": ")
             .append("\"deterministic class-id hash; diagnostic only\"},\n");
         json.append("  \"observedContributionClasses\": [\n");
         int observedIndex = 0;
@@ -269,6 +303,53 @@ public final class TranslucentProbeMetadata {
         json.append("  ]\n");
         json.append("}\n");
         return json.toString();
+    }
+
+    private static void appendSameFrameRgb(
+        StringBuilder json,
+        SameFrameRgbResult result,
+        SameFrameRgbCaptureBoundary boundary,
+        boolean overlayStageEntered,
+        boolean firstPersonDepthCoverageOnPositiveBasePixels
+    ) {
+        json.append("  \"sameFrameRgb\": {\n");
+        appendString(json, "status", "valid", true, 4);
+        json.append("    \"coverage\": \"ordinary main framebuffer after world and any rendered first-person/camera overlays, before post-processing, HUD, menus, and cursor\",\n");
+        json.append("    \"method\": \"one direct RGBA8 read of the already-rendered main framebuffer followed by non-overlapping 3x3 byte-space box averaging\",\n");
+        appendString(json, "captureBoundary", boundary.getMetadataName(), true, 4);
+        json.append("    \"handAndCameraOverlayStageComplete\": ")
+            .append(boundary.isHandAndCameraOverlayStageComplete()).append(",\n");
+        json.append("    \"overlayStageEntered\": ").append(overlayStageEntered)
+            .append(",\n");
+        json.append("    \"firstPersonDepthCoverageOnPositiveBasePixels\": ")
+            .append(firstPersonDepthCoverageOnPositiveBasePixels).append(",\n");
+        json.append("    \"sourceWidth\": ").append(result.getSourceWidth()).append(",\n");
+        json.append("    \"sourceHeight\": ").append(result.getSourceHeight()).append(",\n");
+        json.append("    \"width\": ").append(result.getWidth()).append(",\n");
+        json.append("    \"height\": ").append(result.getHeight()).append(",\n");
+        json.append("    \"byteLength\": ")
+            .append(SameFrameRgbEncoding.expectedRgbLength()).append(",\n");
+        json.append("    \"sourceEncoding\": \"RGBA8 stored framebuffer bytes, bottom-to-top rows\",\n");
+        appendString(json, "encoding", SameFrameRgbEncoding.ENCODING, true, 4);
+        json.append("    \"pixelOrder\": \"row-major, top-left origin\",\n");
+        json.append("    \"channelOrder\": \"RGB\",\n");
+        json.append("    \"downsampleFactor\": ")
+            .append(SameFrameRgbEncoding.DOWNSAMPLE_FACTOR).append(",\n");
+        json.append("    \"averagingColorSpace\": \"stored byte values; no linear-light reconstruction\",\n");
+        json.append("    \"sameFrameAsProbeBuffers\": true,\n");
+        json.append("    \"preHud\": true,\n");
+        json.append("    \"preMenu\": true,\n");
+        json.append("    \"prePostProcess\": true,\n");
+        json.append("    \"additionalRenderPass\": false,\n");
+        json.append("    \"additionalPlayerOrWorldQueries\": false,\n");
+        json.append("    \"rawNativeResolutionSerialized\": false,\n");
+        json.append("    \"thresholdApplied\": false,\n");
+        json.append("    \"agentVisible\": false,\n");
+        json.append("    \"perceptualVisibilityScore\": false,\n");
+        json.append("    \"resourcePackPolicy\": \"vanilla only\",\n");
+        json.append("    \"postShaderPolicy\": \"none loaded\",\n");
+        json.append("    \"unsupportedStates\": [\"framebuffer other than exactly 1920x1080 RGBA8\", \"active post shader\", \"fabulous graphics\", \"non-vanilla resource packs\", \"multisample readback\", \"pixel-pack buffer readback\", \"main framebuffer or viewport not active\"]\n");
+        json.append("  },\n");
     }
 
     private static void appendFogRetention(

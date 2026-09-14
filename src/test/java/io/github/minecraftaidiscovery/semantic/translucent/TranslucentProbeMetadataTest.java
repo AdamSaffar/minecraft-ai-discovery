@@ -10,6 +10,9 @@ import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifest;
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayKind;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBoundary;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbEncoding;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbResult;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -28,6 +31,15 @@ public class TranslucentProbeMetadataTest {
                 "uint16 little-endian class id",
                 2,
                 640 * 360 * 2
+            )
+        );
+        artifacts.put(
+            "framePreHudRgb",
+            new TranslucentProbeMetadata.Artifact(
+                "frame.pre-hud-rgb.rgb8",
+                SameFrameRgbEncoding.ENCODING,
+                SameFrameRgbEncoding.RGB_BYTES_PER_PIXEL,
+                SameFrameRgbEncoding.expectedRgbLength()
             )
         );
         Map<Integer, Long> observed = new LinkedHashMap<>();
@@ -57,6 +69,7 @@ public class TranslucentProbeMetadataTest {
             "base-camera-overlay-retention.png",
             "base-first-person-depth-coverage.png",
             "translucent-frontmost.png",
+            "frame-pre-hud-rgb.png",
             12,
             0,
             12,
@@ -66,10 +79,12 @@ public class TranslucentProbeMetadataTest {
             1,
             overlayResult(),
             firstPersonResult(),
+            sameFrameResult(),
+            SameFrameRgbCaptureBoundary.RENDER_HAND_RETURN,
             observed
         );
 
-        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v5\""));
+        assertTrue(json.contains("\"format\": \"translucent-observation-probe-v6\""));
         assertTrue(json.contains("\"experimental\": true"));
         assertTrue(json.contains("\"researcherOnly\": true"));
         assertTrue(json.contains("\"agentVisible\": false"));
@@ -89,6 +104,22 @@ public class TranslucentProbeMetadataTest {
         assertTrue(json.contains(
             "\"baseFirstPersonDepthCoverage\": \"base-first-person-depth-coverage.png\""
         ));
+        assertTrue(json.contains("\"sameFrameRgb\": \"frame-pre-hud-rgb.png\""));
+        assertTrue(json.contains("\"file\": \"frame.pre-hud-rgb.rgb8\""));
+        assertTrue(json.contains(
+            "\"byteLength\": " + SameFrameRgbEncoding.expectedRgbLength()
+        ));
+        assertTrue(json.contains("\"captureBoundary\": \"render_hand_return\""));
+        assertTrue(json.contains("\"overlayStageEntered\": true"));
+        assertTrue(json.contains(
+            "\"firstPersonDepthCoverageOnPositiveBasePixels\": true"
+        ));
+        assertTrue(json.contains("\"sameFrameAsProbeBuffers\": true"));
+        assertTrue(json.contains("\"preHud\": true"));
+        assertTrue(json.contains("\"preMenu\": true"));
+        assertTrue(json.contains("\"prePostProcess\": true"));
+        assertTrue(json.contains("\"rawNativeResolutionSerialized\": false"));
+        assertTrue(json.contains("\"additionalRenderPass\": false"));
         assertTrue(json.contains("\"postHandDepthSampled\": true"));
         assertTrue(json.contains("\"fullScreenCoveredPixelCount\": 3"));
         assertTrue(json.contains("\"coveredBasePixelCount\": 2"));
@@ -136,6 +167,7 @@ public class TranslucentProbeMetadataTest {
             "overlay.png",
             "first-person.png",
             "front.png",
+            "same-frame.png",
             0,
             0,
             0,
@@ -145,6 +177,8 @@ public class TranslucentProbeMetadataTest {
             0,
             CameraOverlayRetentionResult.noOverlayStage(640, 360),
             FirstPersonDepthCoverageResult.noFirstPersonStage(640, 360),
+            sameFrameResult(),
+            SameFrameRgbCaptureBoundary.RENDER_HAND_RETURN,
             new LinkedHashMap<>()
         );
     }
@@ -185,6 +219,7 @@ public class TranslucentProbeMetadataTest {
             "overlay.png",
             "first-person.png",
             "front.png",
+            "same-frame.png",
             11,
             1,
             12,
@@ -194,6 +229,8 @@ public class TranslucentProbeMetadataTest {
             0,
             CameraOverlayRetentionResult.noOverlayStage(640, 360),
             FirstPersonDepthCoverageResult.noFirstPersonStage(640, 360),
+            sameFrameResult(),
+            SameFrameRgbCaptureBoundary.RENDER_WORLD_RETURN_WITHOUT_HAND,
             new LinkedHashMap<>()
         );
 
@@ -218,6 +255,12 @@ public class TranslucentProbeMetadataTest {
         coverage[1] = (byte)255;
         coverage[2] = (byte)255;
         return new FirstPersonDepthCoverageResult(640, 360, coverage, true);
+    }
+
+    private static SameFrameRgbResult sameFrameResult() {
+        return SameFrameRgbEncoding.fromTopToBottomRgb(
+            new byte[SameFrameRgbEncoding.expectedRgbLength()]
+        );
     }
 
     private static BlockClassVocabulary vocabulary() {
