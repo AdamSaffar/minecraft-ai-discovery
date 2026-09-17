@@ -14,11 +14,17 @@ import io.github.minecraftaidiscovery.semantic.manifest.BlockClassManifestRuntim
 import io.github.minecraftaidiscovery.semantic.manifest.BlockClassVocabulary;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionBufferEncoding;
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionResult;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBoundary;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbEncoding;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbResult;
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,6 +38,8 @@ import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.render.RenderLayer;
@@ -44,6 +52,8 @@ public final class TranslucentProbeCapture {
     public static final int HEIGHT = 360;
 
     private static final int LAYER_RECORD_BYTES_PER_PIXEL = 8;
+    static final int ATOMIC_MOVE_MAX_ATTEMPTS = 8;
+    static final long ATOMIC_MOVE_RETRY_MILLIS = 100L;
     private static final AtomicInteger CAPTURE_SEQUENCE = new AtomicInteger();
 
     private TranslucentProbeCapture() {
@@ -237,9 +247,10 @@ public final class TranslucentProbeCapture {
         byte[] accumulatedOpacity,
         byte[] acceptedFragmentCount,
         CameraOverlayRetentionResult cameraOverlayRetention,
-        FirstPersonDepthCoverageResult firstPersonDepthCoverage
+        FirstPersonDepthCoverageResult firstPersonDepthCoverage,
+        SameFrameRgbResult sameFrameRgb,
+        SameFrameRgbCaptureBoundary sameFrameRgbBoundary
     ) throws IOException {
-        Files.createDirectories(captureDirectory);
         byte[] baseClasses = SemanticClassEncoding.encodeU16Le(WIDTH, HEIGHT, baseClassIds);
         byte[] encodedBaseDepth = TranslucentProbeBufferEncoding.encodeFloat32Le(
             WIDTH,
@@ -289,6 +300,17 @@ public final class TranslucentProbeCapture {
                 "First-person depth-coverage dimensions do not match the F9 capture"
             );
         }
+        if (sameFrameRgb == null
+            || sameFrameRgb.getSourceWidth() != SameFrameRgbEncoding.SOURCE_WIDTH
+            || sameFrameRgb.getSourceHeight() != SameFrameRgbEncoding.SOURCE_HEIGHT
+            || sameFrameRgb.getWidth() != WIDTH
+            || sameFrameRgb.getHeight() != HEIGHT
+            || sameFrameRgbBoundary == null) {
+            throw new IllegalArgumentException(
+                "Same-frame RGB input does not match the F9 capture"
+            );
+        }
+        byte[] framePreHudRgb = sameFrameRgb.copyRgb();
         byte[] baseCameraOverlayRetention =
             CameraOverlayRetentionBufferEncoding.maskToPositiveBase(
                 WIDTH,
@@ -327,6 +349,7 @@ public final class TranslucentProbeCapture {
         String opacityFile = "translucent.accumulated-opacity.u8";
         String countFile = "translucent.accepted-fragment-count.u8";
         String overflowFile = "translucent.storage-overflow.u8";
+        String framePreHudRgbFile = "frame.pre-hud-rgb.rgb8";
         String baseVisualizationFile = "base.png";
         String lightingRetentionVisualizationFile = "base-lighting-retention.png";
         String fogRetentionVisualizationFile = "base-fog-retention.png";
@@ -335,49 +358,58 @@ public final class TranslucentProbeCapture {
         String firstPersonDepthCoverageVisualizationFile =
             "base-first-person-depth-coverage.png";
         String nearestVisualizationFile = "translucent-frontmost.png";
+        String framePreHudRgbVisualizationFile = "frame-pre-hud-rgb.png";
 
-        write(captureDirectory, baseClassesFile, baseClasses);
-        write(captureDirectory, baseDepthFile, encodedBaseDepth);
-        write(captureDirectory, baseLightingRetentionFile, baseLightingRetention);
-        write(captureDirectory, baseLightingValidityFile, baseLightingValidity);
-        write(captureDirectory, baseFogRetentionFile, baseFogRetention);
-        write(
-            captureDirectory,
-            baseCameraOverlayRetentionFile,
-            baseCameraOverlayRetention
-        );
-        write(
-            captureDirectory,
-            baseFirstPersonDepthCoverageFile,
-            baseFirstPersonDepthCoverage
-        );
-        write(captureDirectory, solidFluidFile, encodedSolidFluid);
-        write(captureDirectory, frontToBackFile, frontToBack);
-        write(captureDirectory, rankedFile, ranked);
-        write(captureDirectory, opacityFile, accumulatedOpacity);
-        write(captureDirectory, countFile, acceptedFragmentCount);
-        write(captureDirectory, overflowFile, overflow);
-        writeVisualization(captureDirectory.resolve(baseVisualizationFile), baseClassIds);
-        writeRgbVisualization(
-            captureDirectory.resolve(lightingRetentionVisualizationFile),
-            baseLightingRetention
-        );
-        writeGrayscaleVisualization(
-            captureDirectory.resolve(fogRetentionVisualizationFile),
-            baseFogRetention
-        );
-        writeGrayscaleVisualization(
-            captureDirectory.resolve(cameraOverlayRetentionVisualizationFile),
-            baseCameraOverlayRetention
-        );
-        writeGrayscaleVisualization(
-            captureDirectory.resolve(firstPersonDepthCoverageVisualizationFile),
-            baseFirstPersonDepthCoverage
-        );
-        writeVisualization(
-            captureDirectory.resolve(nearestVisualizationFile),
-            storedLayers.get(0).copyClassIds()
-        );
+        // Metadata becomes visible only after every v6 artifact has been serialized.
+        try (AtomicCaptureDirectory atomicDirectory = openAtomicDirectory(captureDirectory)) {
+            Path outputDirectory = atomicDirectory.getWorkingDirectory();
+            write(outputDirectory, baseClassesFile, baseClasses);
+            write(outputDirectory, baseDepthFile, encodedBaseDepth);
+            write(outputDirectory, baseLightingRetentionFile, baseLightingRetention);
+            write(outputDirectory, baseLightingValidityFile, baseLightingValidity);
+            write(outputDirectory, baseFogRetentionFile, baseFogRetention);
+            write(
+                outputDirectory,
+                baseCameraOverlayRetentionFile,
+                baseCameraOverlayRetention
+            );
+            write(
+                outputDirectory,
+                baseFirstPersonDepthCoverageFile,
+                baseFirstPersonDepthCoverage
+            );
+            write(outputDirectory, solidFluidFile, encodedSolidFluid);
+            write(outputDirectory, frontToBackFile, frontToBack);
+            write(outputDirectory, rankedFile, ranked);
+            write(outputDirectory, opacityFile, accumulatedOpacity);
+            write(outputDirectory, countFile, acceptedFragmentCount);
+            write(outputDirectory, overflowFile, overflow);
+            write(outputDirectory, framePreHudRgbFile, framePreHudRgb);
+            writeVisualization(outputDirectory.resolve(baseVisualizationFile), baseClassIds);
+            writeRgbVisualization(
+                outputDirectory.resolve(lightingRetentionVisualizationFile),
+                baseLightingRetention
+            );
+            writeGrayscaleVisualization(
+                outputDirectory.resolve(fogRetentionVisualizationFile),
+                baseFogRetention
+            );
+            writeGrayscaleVisualization(
+                outputDirectory.resolve(cameraOverlayRetentionVisualizationFile),
+                baseCameraOverlayRetention
+            );
+            writeGrayscaleVisualization(
+                outputDirectory.resolve(firstPersonDepthCoverageVisualizationFile),
+                baseFirstPersonDepthCoverage
+            );
+            writeVisualization(
+                outputDirectory.resolve(nearestVisualizationFile),
+                storedLayers.get(0).copyClassIds()
+            );
+            writeRgbVisualization(
+                outputDirectory.resolve(framePreHudRgbVisualizationFile),
+                framePreHudRgb
+            );
 
         LinkedHashMap<String, TranslucentProbeMetadata.Artifact> artifacts = new LinkedHashMap<>();
         artifacts.put(
@@ -468,6 +500,15 @@ public final class TranslucentProbeCapture {
             artifact(countFile, "uint8 saturated at 255", 1, acceptedFragmentCount)
         );
         artifacts.put("storageOverflow", artifact(overflowFile, "uint8 boolean", 1, overflow));
+        artifacts.put(
+            "framePreHudRgb",
+            artifact(
+                framePreHudRgbFile,
+                SameFrameRgbEncoding.ENCODING,
+                SameFrameRgbEncoding.RGB_BYTES_PER_PIXEL,
+                framePreHudRgb
+            )
+        );
 
         long saturatedFragmentCountPixels = countValue(acceptedFragmentCount, 0xFF);
         String metadata = TranslucentProbeMetadata.toJson(
@@ -486,6 +527,7 @@ public final class TranslucentProbeCapture {
             cameraOverlayRetentionVisualizationFile,
             firstPersonDepthCoverageVisualizationFile,
             nearestVisualizationFile,
+            framePreHudRgbVisualizationFile,
             validLightingBasePixelCount,
             unsupportedLightingBasePixelCount,
             positiveBasePixelCount,
@@ -495,11 +537,34 @@ public final class TranslucentProbeCapture {
             saturatedFragmentCountPixels,
             cameraOverlayRetention,
             firstPersonDepthCoverage,
+            sameFrameRgb,
+            sameFrameRgbBoundary,
             observedClasses(solidFluid, storedLayers)
         );
-        Path metadataPath = captureDirectory.resolve("metadata.json");
-        Files.write(metadataPath, metadata.getBytes(StandardCharsets.UTF_8));
-        return metadataPath;
+            Files.write(
+                outputDirectory.resolve("metadata.json"),
+                metadata.getBytes(StandardCharsets.UTF_8)
+            );
+            atomicDirectory.commit();
+        }
+        return captureDirectory.resolve("metadata.json");
+    }
+
+    static AtomicCaptureDirectory openAtomicDirectory(Path captureDirectory)
+        throws IOException {
+        return new AtomicCaptureDirectory(captureDirectory);
+    }
+
+    static AtomicCaptureDirectory openAtomicDirectory(
+        Path captureDirectory,
+        AtomicDirectoryMove directoryMove,
+        RetryPause retryPause
+    ) throws IOException {
+        return new AtomicCaptureDirectory(captureDirectory, directoryMove, retryPause);
+    }
+
+    private static void moveAtomically(Path source, Path target) throws IOException {
+        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
     }
 
     private static Framebuffer framebuffer(List<Framebuffer> owned) {
@@ -912,7 +977,9 @@ public final class TranslucentProbeCapture {
 
         public Path complete(
             CameraOverlayRetentionResult cameraOverlayRetention,
-            FirstPersonDepthCoverageResult firstPersonDepthCoverage
+            FirstPersonDepthCoverageResult firstPersonDepthCoverage,
+            SameFrameRgbResult sameFrameRgb,
+            SameFrameRgbCaptureBoundary sameFrameRgbBoundary
         )
             throws IOException {
             if (completed) {
@@ -940,8 +1007,100 @@ public final class TranslucentProbeCapture {
                 accumulatedOpacity,
                 acceptedFragmentCount,
                 cameraOverlayRetention,
-                firstPersonDepthCoverage
+                firstPersonDepthCoverage,
+                sameFrameRgb,
+                sameFrameRgbBoundary
             );
+        }
+    }
+
+    static final class AtomicCaptureDirectory implements AutoCloseable {
+        private final Path finalDirectory;
+        private final Path workingDirectory;
+        private final AtomicDirectoryMove directoryMove;
+        private final RetryPause retryPause;
+        private boolean committed;
+
+        private AtomicCaptureDirectory(Path finalDirectory) throws IOException {
+            this(finalDirectory, TranslucentProbeCapture::moveAtomically, Thread::sleep);
+        }
+
+        private AtomicCaptureDirectory(
+            Path finalDirectory,
+            AtomicDirectoryMove directoryMove,
+            RetryPause retryPause
+        ) throws IOException {
+            if (finalDirectory == null
+                || finalDirectory.getFileName() == null
+                || finalDirectory.getParent() == null
+                || directoryMove == null
+                || retryPause == null) {
+                throw new IllegalArgumentException("F9 capture directory is invalid");
+            }
+            this.finalDirectory = finalDirectory;
+            this.workingDirectory = finalDirectory.resolveSibling(
+                finalDirectory.getFileName().toString() + ".partial"
+            );
+            this.directoryMove = directoryMove;
+            this.retryPause = retryPause;
+            Files.createDirectories(finalDirectory.getParent());
+            if (Files.exists(finalDirectory, LinkOption.NOFOLLOW_LINKS)
+                || Files.exists(workingDirectory, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("F9 capture directory already exists");
+            }
+            Files.createDirectory(workingDirectory);
+        }
+
+        Path getWorkingDirectory() {
+            return workingDirectory;
+        }
+
+        void commit() throws IOException {
+            if (committed) {
+                throw new IllegalStateException("F9 capture directory was already committed");
+            }
+            for (int attempt = 1; attempt <= ATOMIC_MOVE_MAX_ATTEMPTS; attempt++) {
+                try {
+                    directoryMove.move(workingDirectory, finalDirectory);
+                    committed = true;
+                    return;
+                } catch (AccessDeniedException denied) {
+                    if (attempt == ATOMIC_MOVE_MAX_ATTEMPTS) {
+                        throw denied;
+                    }
+                    // Windows file filters can briefly hold a newly written capture file.
+                    // Retry only that denial; the successful publication is still one atomic move.
+                    try {
+                        retryPause.pause(ATOMIC_MOVE_RETRY_MILLIS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(
+                            "Interrupted while retrying F9 capture publication",
+                            interrupted
+                        );
+                    }
+                }
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (committed || !Files.exists(workingDirectory)) {
+                return;
+            }
+            List<Path> entries;
+            try (Stream<Path> paths = Files.list(workingDirectory)) {
+                entries = paths.collect(Collectors.toList());
+            }
+            for (Path entry : entries) {
+                if (Files.isDirectory(entry)) {
+                    throw new IOException(
+                        "Unexpected directory in incomplete F9 capture: " + entry.getFileName()
+                    );
+                }
+                Files.deleteIfExists(entry);
+            }
+            Files.deleteIfExists(workingDirectory);
         }
     }
 
@@ -962,5 +1121,15 @@ public final class TranslucentProbeCapture {
             this.validBasePixelCount = validBasePixelCount;
             this.unsupportedBasePixelCount = unsupportedBasePixelCount;
         }
+    }
+
+    @FunctionalInterface
+    interface AtomicDirectoryMove {
+        void move(Path source, Path target) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface RetryPause {
+        void pause(long milliseconds) throws InterruptedException;
     }
 }

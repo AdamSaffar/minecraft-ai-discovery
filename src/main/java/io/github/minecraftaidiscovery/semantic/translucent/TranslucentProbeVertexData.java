@@ -45,7 +45,8 @@ public final class TranslucentProbeVertexData {
     public byte[] takeVertices(int vertexCount) {
         int byteCount = checkedByteCount(vertexCount);
         if (writeOffset == readOffset) {
-            return null;
+            // Empty chunk layers still upload and need a matching non-null sidecar.
+            return new byte[byteCount];
         }
         requireAvailable(byteCount, vertexCount);
 
@@ -60,7 +61,8 @@ public final class TranslucentProbeVertexData {
     public byte[] snapshotLastVertices(int vertexCount) {
         int byteCount = checkedByteCount(vertexCount);
         if (writeOffset == readOffset) {
-            return null;
+            // Empty saved translucent states use the same zero-length representation.
+            return new byte[byteCount];
         }
         requireAvailable(byteCount, vertexCount);
         return Arrays.copyOfRange(data, writeOffset - byteCount, writeOffset);

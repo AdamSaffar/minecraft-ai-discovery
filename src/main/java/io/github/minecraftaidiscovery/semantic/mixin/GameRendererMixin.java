@@ -1,6 +1,7 @@
 package io.github.minecraftaidiscovery.semantic.mixin;
 
 import io.github.minecraftaidiscovery.semantic.overlay.CameraOverlayRetentionCapture;
+import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBoundary;
 import java.nio.file.Path;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.Camera;
@@ -26,7 +27,9 @@ abstract class GameRendererMixin {
         float tickDelta,
         CallbackInfo callback
     ) {
-        semanticObservation$completePendingProbe();
+        semanticObservation$completePendingProbe(
+            SameFrameRgbCaptureBoundary.RENDER_HAND_RETURN
+        );
     }
 
     @Inject(method = "renderWorld", at = @At("RETURN"))
@@ -37,13 +40,17 @@ abstract class GameRendererMixin {
         CallbackInfo callback
     ) {
         // renderHand can be disabled independently; this closes that no-overlay boundary.
-        semanticObservation$completePendingProbe();
+        semanticObservation$completePendingProbe(
+            SameFrameRgbCaptureBoundary.RENDER_WORLD_RETURN_WITHOUT_HAND
+        );
     }
 
-    private static void semanticObservation$completePendingProbe() {
+    private static void semanticObservation$completePendingProbe(
+        SameFrameRgbCaptureBoundary boundary
+    ) {
         MinecraftClient client = MinecraftClient.getInstance();
         try {
-            Path metadataPath = CameraOverlayRetentionCapture.completePending();
+            Path metadataPath = CameraOverlayRetentionCapture.completePending(boundary);
             if (metadataPath == null) {
                 return;
             }

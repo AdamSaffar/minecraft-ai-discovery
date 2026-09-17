@@ -3,7 +3,6 @@ package io.github.minecraftaidiscovery.semantic.translucent;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -24,7 +23,34 @@ public class TranslucentProbeVertexDataTest {
         assertEquals(65535, TranslucentProbeVertexData.classIdAt(encoded, 16));
         assertEquals(TranslucentProbeSource.FLUID, TranslucentProbeVertexData.sourceAt(encoded, 16));
         assertFalse(TranslucentProbeVertexData.isBackgroundOnly(encoded));
-        assertNull(data.takeVertices(0));
+        assertArrayEquals(new byte[0], data.takeVertices(0));
+    }
+
+    @Test
+    public void representsEmptyDrawAndSavedStateWithEmptySidecars() {
+        TranslucentProbeVertexData data = new TranslucentProbeVertexData();
+        byte[] upload = data.takeVertices(0);
+        byte[] snapshot = data.snapshotLastVertices(0);
+
+        assertArrayEquals(new byte[0], upload);
+        assertArrayEquals(new byte[0], snapshot);
+        assertTrue(TranslucentProbeVertexData.isBackgroundOnly(upload));
+
+        TranslucentProbeVertexData restored = new TranslucentProbeVertexData();
+        restored.restoreSnapshot(snapshot);
+        assertArrayEquals(new byte[0], restored.takeVertices(0));
+    }
+
+    @Test
+    public void emptyDrawDoesNotConsumeTheNextPopulatedDraw() {
+        TranslucentProbeVertexData data = new TranslucentProbeVertexData();
+        appendQuad(data, 143, TranslucentProbeSource.BLOCK_MODEL);
+
+        assertArrayEquals(new byte[0], data.takeVertices(0));
+        byte[] populated = data.takeVertices(4);
+
+        assertEquals(143, TranslucentProbeVertexData.classIdAt(populated, 0));
+        TranslucentProbeVertexData.requireConstantQuadContributions(populated);
     }
 
     @Test
