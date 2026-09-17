@@ -18,6 +18,7 @@ import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbCaptureBou
 import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbEncoding;
 import io.github.minecraftaidiscovery.semantic.visibility.SameFrameRgbResult;
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
 import java.nio.FloatBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -51,6 +52,8 @@ public final class TranslucentProbeCapture {
     public static final int HEIGHT = 360;
 
     private static final int LAYER_RECORD_BYTES_PER_PIXEL = 8;
+    static final int ATOMIC_MOVE_MAX_ATTEMPTS = 8;
+    static final long ATOMIC_MOVE_RETRY_MILLIS = 100L;
     private static final AtomicInteger CAPTURE_SEQUENCE = new AtomicInteger();
 
     private TranslucentProbeCapture() {
@@ -552,6 +555,18 @@ public final class TranslucentProbeCapture {
         return new AtomicCaptureDirectory(captureDirectory);
     }
 
+    static AtomicCaptureDirectory openAtomicDirectory(
+        Path captureDirectory,
+        AtomicDirectoryMove directoryMove,
+        RetryPause retryPause
+    ) throws IOException {
+        return new AtomicCaptureDirectory(captureDirectory, directoryMove, retryPause);
+    }
+
+    private static void moveAtomically(Path source, Path target) throws IOException {
+        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+    }
+
     private static Framebuffer framebuffer(List<Framebuffer> owned) {
         Framebuffer framebuffer = new Framebuffer(
             WIDTH,
@@ -1002,18 +1017,32 @@ public final class TranslucentProbeCapture {
     static final class AtomicCaptureDirectory implements AutoCloseable {
         private final Path finalDirectory;
         private final Path workingDirectory;
+        private final AtomicDirectoryMove directoryMove;
+        private final RetryPause retryPause;
         private boolean committed;
 
         private AtomicCaptureDirectory(Path finalDirectory) throws IOException {
+            this(finalDirectory, TranslucentProbeCapture::moveAtomically, Thread::sleep);
+        }
+
+        private AtomicCaptureDirectory(
+            Path finalDirectory,
+            AtomicDirectoryMove directoryMove,
+            RetryPause retryPause
+        ) throws IOException {
             if (finalDirectory == null
                 || finalDirectory.getFileName() == null
-                || finalDirectory.getParent() == null) {
+                || finalDirectory.getParent() == null
+                || directoryMove == null
+                || retryPause == null) {
                 throw new IllegalArgumentException("F9 capture directory is invalid");
             }
             this.finalDirectory = finalDirectory;
             this.workingDirectory = finalDirectory.resolveSibling(
                 finalDirectory.getFileName().toString() + ".partial"
             );
+            this.directoryMove = directoryMove;
+            this.retryPause = retryPause;
             Files.createDirectories(finalDirectory.getParent());
             if (Files.exists(finalDirectory, LinkOption.NOFOLLOW_LINKS)
                 || Files.exists(workingDirectory, LinkOption.NOFOLLOW_LINKS)) {
@@ -1030,12 +1059,28 @@ public final class TranslucentProbeCapture {
             if (committed) {
                 throw new IllegalStateException("F9 capture directory was already committed");
             }
-            Files.move(
-                workingDirectory,
-                finalDirectory,
-                StandardCopyOption.ATOMIC_MOVE
-            );
-            committed = true;
+            for (int attempt = 1; attempt <= ATOMIC_MOVE_MAX_ATTEMPTS; attempt++) {
+                try {
+                    directoryMove.move(workingDirectory, finalDirectory);
+                    committed = true;
+                    return;
+                } catch (AccessDeniedException denied) {
+                    if (attempt == ATOMIC_MOVE_MAX_ATTEMPTS) {
+                        throw denied;
+                    }
+                    // Windows file filters can briefly hold a newly written capture file.
+                    // Retry only that denial; the successful publication is still one atomic move.
+                    try {
+                        retryPause.pause(ATOMIC_MOVE_RETRY_MILLIS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(
+                            "Interrupted while retrying F9 capture publication",
+                            interrupted
+                        );
+                    }
+                }
+            }
         }
 
         @Override
@@ -1076,5 +1121,15 @@ public final class TranslucentProbeCapture {
             this.validBasePixelCount = validBasePixelCount;
             this.unsupportedBasePixelCount = unsupportedBasePixelCount;
         }
+    }
+
+    @FunctionalInterface
+    interface AtomicDirectoryMove {
+        void move(Path source, Path target) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface RetryPause {
+        void pause(long milliseconds) throws InterruptedException;
     }
 }
