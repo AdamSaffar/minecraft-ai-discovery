@@ -51,3 +51,32 @@ tasks.named('runClient', JavaExec) {
         systemProperty 'semanticObservation.translucentProbe', translucentProbe.get()
     }
 }
+
+tasks.register('runBaseQualificationCalibration', JavaExec) {
+    group = 'verification'
+    description = 'Runs the researcher-only offline base-qualification calibration tool.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'io.github.minecraftaidiscovery.semantic.visibility.BaseQualificationCalibrationStudy'
+
+    doFirst {
+        def mode = providers.gradleProperty('calibrationMode').orNull
+        def manifest = providers.gradleProperty('calibrationManifest').orNull
+        def probeRoot = providers.gradleProperty('calibrationProbeRoot').orNull
+        def output = providers.gradleProperty('calibrationOutput').orNull
+        if (mode == null || manifest == null || probeRoot == null || output == null) {
+            throw new GradleException(
+                'Provide calibrationMode, calibrationManifest, calibrationProbeRoot, and calibrationOutput.'
+            )
+        }
+        args mode, manifest, probeRoot, output
+        if (mode != 'generate') {
+            def responses = providers.gradleProperty('calibrationResponses').orNull
+            if (responses == null) {
+                throw new GradleException(
+                    'Provide calibrationResponses for a scoring mode.'
+                )
+            }
+            args responses
+        }
+    }
+}
